@@ -81,7 +81,7 @@ financial-pro-app/
 
 1. Start both the backend and frontend servers
 2. Open your browser to `http://localhost:3000`
-3. Upload an Excel file (.xlsx or .xls) with expense data
+3. Upload an Excel file (.xlsx, .xls) or CSV file (.csv) with expense data
 4. View the generated report with:
    - Summary statistics
    - Category breakdown (pie chart and bar chart)
@@ -89,9 +89,9 @@ financial-pro-app/
    - Transaction details
 5. Download the report as PDF
 
-## Excel File Requirements
+## File Requirements
 
-Your Excel file should contain at least two columns:
+Your Excel or CSV file should contain at least two columns:
 - **Description**: Transaction descriptions
 - **Amount**: Transaction amounts (numeric)
 

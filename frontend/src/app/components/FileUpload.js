@@ -39,11 +39,17 @@ export default function FileUpload({ onFileUpload, isLoading }) {
     // Validate file type
     const allowedTypes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-      'application/vnd.ms-excel' // .xls
+      'application/vnd.ms-excel', // .xls
+      'text/csv', // .csv
+      'application/csv' // .csv alternative MIME type
     ];
     
-    if (!allowedTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-      alert('Please upload an Excel file (.xlsx or .xls)');
+    const fileName = file.name.toLowerCase();
+    if (!allowedTypes.includes(file.type) && 
+        !fileName.endsWith('.xlsx') && 
+        !fileName.endsWith('.xls') && 
+        !fileName.endsWith('.csv')) {
+      alert('Please upload an Excel file (.xlsx, .xls) or CSV file (.csv)');
       return;
     }
 
@@ -56,7 +62,7 @@ export default function FileUpload({ onFileUpload, isLoading }) {
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Upload Your Expense File</h2>
         <p className="text-gray-600">
-          Upload an Excel file (.xlsx or .xls) containing your expense data. 
+          Upload an Excel file (.xlsx, .xls) or CSV file (.csv) containing your expense data. 
           Make sure your file has columns for description and amount.
         </p>
       </div>
@@ -74,7 +80,7 @@ export default function FileUpload({ onFileUpload, isLoading }) {
       >
         <input
           type="file"
-          accept=".xlsx,.xls"
+          accept=".xlsx,.xls,.csv"
           onChange={handleChange}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           disabled={isLoading}
@@ -105,13 +111,13 @@ export default function FileUpload({ onFileUpload, isLoading }) {
           ) : (
             <div className="space-y-2">
               <p className="text-lg font-medium text-gray-900">
-                {selectedFile ? selectedFile.name : 'Drop your Excel file here'}
+                {selectedFile ? selectedFile.name : 'Drop your expense file here'}
               </p>
               <p className="text-gray-500">
                 or click to browse files
               </p>
               <p className="text-sm text-gray-400">
-                Supports .xlsx and .xls files
+                Supports .xlsx, .xls, and .csv files
               </p>
             </div>
           )}
