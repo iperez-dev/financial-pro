@@ -21,13 +21,196 @@ export default function Report({ data, onDownloadPDF }) {
 
   const handleDownloadPDF = async () => {
     try {
+      // Create a completely isolated container for PDF generation
       const element = reportRef.current;
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff'
+      
+      // Create a new iframe to isolate the content from all external CSS
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'absolute';
+      iframe.style.left = '-9999px';
+      iframe.style.width = '1200px';
+      iframe.style.height = '800px';
+      document.body.appendChild(iframe);
+      
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+      
+      // Clone the element content
+      const clonedElement = element.cloneNode(true);
+      
+      // Write clean HTML with only safe CSS
+      iframeDoc.open();
+      iframeDoc.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              margin: 20px;
+              color: #000000;
+              background-color: #ffffff;
+              line-height: 1.4;
+            }
+            h1, h2, h3 {
+              color: #000000;
+              margin: 15px 0 10px 0;
+              font-weight: bold;
+            }
+            h1 { font-size: 24px; }
+            h2 { font-size: 20px; }
+            h3 { font-size: 18px; }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 15px 0;
+            }
+            th, td {
+              border: 1px solid #cccccc;
+              padding: 10px;
+              text-align: left;
+            }
+            th {
+              background-color: #f5f5f5;
+              font-weight: bold;
+            }
+            .summary-grid {
+              display: flex;
+              gap: 20px;
+              margin: 20px 0;
+              flex-wrap: wrap;
+            }
+            .summary-card {
+              border: 2px solid #3b82f6;
+              border-radius: 8px;
+              padding: 20px;
+              min-width: 200px;
+              background-color: #f8fafc;
+            }
+            .summary-card h3 {
+              margin: 0 0 10px 0;
+              color: #1e40af;
+            }
+            .summary-card p {
+              margin: 0;
+              font-size: 24px;
+              font-weight: bold;
+              color: #000000;
+            }
+            .chart-replacement {
+              border: 1px solid #cccccc;
+              padding: 20px;
+              margin: 20px 0;
+              background-color: #f9f9f9;
+              text-align: center;
+              font-style: italic;
+              color: #666666;
+            }
+          </style>
+        </head>
+        <body>
+          <div id="content"></div>
+        </body>
+        </html>
+      `);
+      iframeDoc.close();
+      
+      // Process the cloned content to make it PDF-friendly
+      const contentDiv = iframeDoc.getElementById('content');
+      
+      // Build clean HTML structure using the actual data
+      let htmlContent = `<h1>Financial Pro - Expense Report</h1>`;
+      
+      // Add summary cards using actual data
+      htmlContent += '<div class="summary-grid">';
+      htmlContent += `
+        <div class="summary-card">
+          <h3>Total Expenses</h3>
+          <p>${formatCurrency(summary.total_expenses)}</p>
+        </div>
+        <div class="summary-card">
+          <h3>Total Transactions</h3>
+          <p>${summary.total_transactions}</p>
+        </div>
+        <div class="summary-card">
+          <h3>Categories</h3>
+          <p>${summary.categories.length}</p>
+        </div>
+      `;
+      htmlContent += '</div>';
+      
+      // Add category summary table
+      htmlContent += `
+        <h2>Category Summary</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Amount</th>
+              <th>Transactions</th>
+              <th>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      summary.categories.forEach(category => {
+        htmlContent += `
+          <tr>
+            <td>${category.category}</td>
+            <td>${formatCurrency(category.total_amount)}</td>
+            <td>${category.transaction_count}</td>
+            <td>${category.percentage}%</td>
+          </tr>
+        `;
       });
+      
+      htmlContent += `
+          </tbody>
+        </table>
+      `;
+      
+      // Add recent transactions
+      htmlContent += `
+        <h2>Recent Transactions (${Math.min(10, transactions.length)} of ${transactions.length})</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Amount</th>
+              <th>Category</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      
+      transactions.slice(0, 10).forEach(transaction => {
+        htmlContent += `
+          <tr>
+            <td>${transaction.description}</td>
+            <td>${formatCurrency(transaction.amount)}</td>
+            <td>${transaction.category}</td>
+          </tr>
+        `;
+      });
+      
+      htmlContent += `
+          </tbody>
+        </table>
+      `;
+      
+      contentDiv.innerHTML = htmlContent;
+      
+      // Generate PDF from the clean iframe content
+      const canvas = await html2canvas(iframeDoc.body, {
+        scale: 2,
+        useCORS: false,
+        allowTaint: false,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+      
+      // Clean up
+      document.body.removeChild(iframe);
 
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -55,7 +238,72 @@ export default function Report({ data, onDownloadPDF }) {
       }
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Error generating PDF. Please try again.');
+      console.error('Error details:', error.message, error.stack);
+      
+      // Try a simpler approach if the advanced one fails
+      try {
+        console.log('Attempting simplified PDF generation...');
+        const element = reportRef.current;
+        
+        // Use a much simpler approach - just capture with minimal settings
+        const canvas = await html2canvas(element, {
+          scale: 1,
+          useCORS: false,
+          allowTaint: false,
+          backgroundColor: '#ffffff',
+          logging: false,
+          ignoreElements: (element) => {
+            // Skip elements that are known to cause issues
+            return element.tagName === 'SVG' || 
+                   element.classList?.contains('recharts-wrapper') ||
+                   element.classList?.contains('recharts-surface');
+          },
+          onclone: (clonedDoc) => {
+            // Remove all stylesheets completely for this fallback
+            const allStyles = clonedDoc.querySelectorAll('style, link[rel="stylesheet"]');
+            allStyles.forEach(style => style.remove());
+            
+            // Add only the most basic styles
+            const basicStyle = clonedDoc.createElement('style');
+            basicStyle.textContent = `
+              * { color: #000 !important; background: transparent !important; }
+              table { border-collapse: collapse; width: 100%; }
+              th, td { border: 1px solid #ccc; padding: 8px; }
+              th { background: #f5f5f5 !important; }
+              h1, h2, h3 { color: #000 !important; margin: 10px 0; }
+            `;
+            clonedDoc.head.appendChild(basicStyle);
+          }
+        });
+
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        
+        const imgWidth = 210;
+        const pageHeight = 295;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        let heightLeft = imgHeight;
+        let position = 0;
+
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft >= 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+
+        pdf.save('financial-report.pdf');
+        
+        if (onDownloadPDF) {
+          onDownloadPDF();
+        }
+      } catch (fallbackError) {
+        console.error('Fallback PDF generation also failed:', fallbackError);
+        alert(`Error generating PDF: ${error.message || 'Unknown error'}. Please try refreshing the page and uploading your file again.`);
+      }
     }
   };
 
