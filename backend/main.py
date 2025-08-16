@@ -210,8 +210,32 @@ async def process_expenses(file: UploadFile = File(...)):
         # Convert to list of dictionaries for JSON response
         category_data = category_summary.to_dict('records')
         
-        # Transaction details
-        transactions = df[['description', 'amount', 'category']].to_dict('records')
+        # Transaction details - include date if available
+        transaction_columns = ['description', 'amount', 'category']
+        
+        # Check if we have date information and add it
+        date_column = None
+        for col in df.columns:
+            if 'date' in col.lower() or col.lower() in ['details']:
+                # For Chase CSV, the 'Details' column contains dates, 'Posting Date' contains descriptions
+                if col.lower() == 'details':
+                    date_column = col
+                    break
+                elif 'date' in col.lower():
+                    date_column = col
+                    break
+        
+        if date_column:
+            transaction_columns.insert(0, 'date')
+            df['date'] = df[date_column]
+            # Format dates for better display
+            try:
+                df['date'] = pd.to_datetime(df['date']).dt.strftime('%m/%d/%Y')
+            except:
+                # If date parsing fails, keep original format
+                pass
+        
+        transactions = df[transaction_columns].to_dict('records')
         
         # Monthly breakdown (if date column exists)
         monthly_data = []
