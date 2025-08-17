@@ -24,14 +24,17 @@ class Category(BaseModel):
     id: str
     name: str
     keywords: List[str] = []
+    group: str = "Other"
 
 class CategoryCreate(BaseModel):
     name: str
     keywords: List[str] = []
+    group: str = "Other"
 
 class CategoryUpdate(BaseModel):
     name: str = None
     keywords: List[str] = None
+    group: str = None
 
 class TransactionCategoryUpdate(BaseModel):
     transaction_id: int
@@ -43,22 +46,24 @@ class CategoryUpdateRequest(BaseModel):
 # Categories file path
 CATEGORIES_FILE = "categories.json"
 TRANSACTION_OVERRIDES_FILE = "transaction_overrides.json"
+MERCHANT_MAPPINGS_FILE = "merchant_mappings.json"
+ZELLE_RECIPIENTS_FILE = "zelle_recipients.json"
 
 # Default categories
 DEFAULT_CATEGORIES = [
-    {"id": "mortgage", "name": "Mortgage", "keywords": ["mortgage", "home loan"]},
-    {"id": "hoa", "name": "HOA", "keywords": ["hoa", "homeowners", "association"]},
-    {"id": "city_gas", "name": "City Gas", "keywords": ["city gas", "gas utility", "natural gas"]},
-    {"id": "fpl", "name": "FPL", "keywords": ["fpl", "florida power", "electric"]},
-    {"id": "internet", "name": "Internet", "keywords": ["internet", "wifi", "broadband", "comcast", "xfinity"]},
-    {"id": "phone", "name": "Phone", "keywords": ["phone", "mobile", "cell", "verizon", "att", "t-mobile"]},
-    {"id": "toll", "name": "Toll", "keywords": ["toll", "sunpass", "ezpass", "turnpike"]},
-    {"id": "gas_station", "name": "Gas Station", "keywords": ["gas station", "shell", "bp", "exxon", "chevron", "fuel"]},
-    {"id": "student_loan", "name": "Student Loan", "keywords": ["student loan", "education", "navient", "sallie mae"]},
-    {"id": "car_insurance", "name": "Car Insurance", "keywords": ["car insurance", "auto insurance", "geico", "state farm", "progressive"]},
-    {"id": "credit_card_jenny", "name": "Credit Card Jenny", "keywords": ["jenny", "credit card jenny"]},
-    {"id": "credit_card_ivan", "name": "Credit Card Ivan", "keywords": ["ivan", "credit card ivan"]},
-    {"id": "childcare", "name": "ChildCare", "keywords": ["childcare", "daycare", "babysitter", "nanny"]}
+    {"id": "mortgage", "name": "Mortgage", "keywords": ["mortgage", "home loan"], "group": "Housing"},
+    {"id": "hoa", "name": "HOA", "keywords": ["hoa", "homeowners", "association"], "group": "Housing"},
+    {"id": "city_gas", "name": "City Gas", "keywords": ["city gas", "gas utility", "natural gas"], "group": "Utilities"},
+    {"id": "fpl", "name": "FPL", "keywords": ["fpl", "florida power", "electric"], "group": "Utilities"},
+    {"id": "internet", "name": "Internet", "keywords": ["internet", "wifi", "broadband", "comcast", "xfinity"], "group": "Utilities"},
+    {"id": "phone", "name": "Phone", "keywords": ["phone", "mobile", "cell", "verizon", "att", "t-mobile"], "group": "Utilities"},
+    {"id": "toll", "name": "Toll", "keywords": ["toll", "sunpass", "ezpass", "turnpike"], "group": "Transportation"},
+    {"id": "gas_station", "name": "Gas Station", "keywords": ["gas station", "shell", "bp", "exxon", "chevron", "fuel"], "group": "Transportation"},
+    {"id": "student_loan", "name": "Student Loan", "keywords": ["student loan", "education", "navient", "sallie mae"], "group": "Education"},
+    {"id": "car_insurance", "name": "Car Insurance", "keywords": ["car insurance", "auto insurance", "geico", "state farm", "progressive"], "group": "Insurance"},
+    {"id": "credit_card_jenny", "name": "Credit Card Jenny", "keywords": ["jenny", "credit card jenny"], "group": "Credit Cards"},
+    {"id": "credit_card_ivan", "name": "Credit Card Ivan", "keywords": ["ivan", "credit card ivan"], "group": "Credit Cards"},
+    {"id": "childcare", "name": "ChildCare", "keywords": ["childcare", "daycare", "babysitter", "nanny"], "group": "Family"}
 ]
 
 # Category management functions
@@ -100,6 +105,117 @@ def save_transaction_overrides(overrides):
     with open(TRANSACTION_OVERRIDES_FILE, 'w') as f:
         json.dump(overrides, f, indent=2)
 
+def load_merchant_mappings():
+    """Load merchant-to-category mappings from JSON file"""
+    if os.path.exists(MERCHANT_MAPPINGS_FILE):
+        try:
+            with open(MERCHANT_MAPPINGS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_merchant_mappings(mappings):
+    """Save merchant-to-category mappings to JSON file"""
+    with open(MERCHANT_MAPPINGS_FILE, 'w') as f:
+        json.dump(mappings, f, indent=2)
+
+def load_zelle_recipients():
+    """Load Zelle recipient-to-category mappings from JSON file"""
+    if os.path.exists(ZELLE_RECIPIENTS_FILE):
+        try:
+            with open(ZELLE_RECIPIENTS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    
+    # Default Zelle recipient mappings
+    default_mappings = {
+        "Doris": "Phone",
+        "Yamilka Maikel": "ChildCare"
+    }
+    save_zelle_recipients(default_mappings)
+    return default_mappings
+
+def save_zelle_recipients(mappings):
+    """Save Zelle recipient-to-category mappings to JSON file"""
+    with open(ZELLE_RECIPIENTS_FILE, 'w') as f:
+        json.dump(mappings, f, indent=2)
+
+def extract_zelle_recipient(description: str) -> str:
+    """Extract recipient name from Zelle payment description"""
+    import re
+    
+    print(f"🔍 Checking for Zelle payment: '{description}'")
+    
+    # Check if this is a Zelle payment
+    if not re.search(r'zelle payment to', description.lower()):
+        return None
+    
+    print(f"✅ Zelle payment detected")
+    
+    # Extract recipient name - pattern: "Zelle payment to [Name] [phone/numbers]"
+    # Example: "Zelle payment to Doris 25858144732"
+    # Example: "Zelle payment to Yamilka Maikel 25858181820"
+    
+    match = re.search(r'zelle payment to\s+([^0-9]+)', description.lower())
+    if match:
+        recipient = match.group(1).strip().title()  # Convert to Title Case
+        print(f"📱 Extracted Zelle recipient: '{recipient}'")
+        return recipient
+    
+    return None
+
+def is_zelle_payment(description: str) -> bool:
+    """Check if transaction is a Zelle payment"""
+    return 'zelle payment to' in description.lower()
+
+def extract_merchant_name(description: str) -> str:
+    """Extract merchant name from transaction description for intelligent matching"""
+    import re
+    
+    print(f"🔍 Backend extracting merchant from: '{description}'")
+    
+    # Clean the description
+    desc = description.strip().upper()
+    print(f"Step 1 - Uppercase: '{desc}'")
+    
+    # Remove common patterns that aren't part of merchant name
+    # Remove dates (MM/DD, DD/MM, etc.)
+    desc = re.sub(r'\b\d{1,2}/\d{1,2}\b', '', desc)
+    desc = re.sub(r'\b\d{2}/\d{2}/\d{2,4}\b', '', desc)
+    print(f"Step 2 - Remove dates: '{desc}'")
+    
+    # Remove card numbers and reference numbers (6+ digits)
+    desc = re.sub(r'\b\d{6,}\b', '', desc)
+    print(f"Step 3 - Remove long numbers: '{desc}'")
+    
+    # Remove common state suffixes
+    desc = re.sub(r'\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC)\s*$', '', desc)
+    print(f"Step 4 - Remove states: '{desc}'")
+    
+    # Remove store numbers and location codes
+    desc = re.sub(r'\s*#\d+\s*', ' ', desc)
+    desc = re.sub(r'\s*\d{3,6}\s*$', '', desc)
+    print(f"Step 5 - Remove store numbers: '{desc}'")
+    
+    # Clean up extra spaces
+    desc = re.sub(r'\s+', ' ', desc).strip()
+    print(f"Step 6 - Clean spaces: '{desc}'")
+    
+    # Get the main merchant name (first 2 words for consistency)
+    words = desc.split()
+    if len(words) >= 2:
+        # Take first 2 words as merchant name for consistency
+        merchant = ' '.join(words[:2])
+    elif len(words) == 1:
+        merchant = words[0]
+    else:
+        merchant = desc
+    
+    print(f"Final backend merchant name: '{merchant}'")
+    return merchant.strip()
+
 def get_transaction_key(description: str, amount: float, date: str = None) -> str:
     """Generate a unique, URL-safe key for a transaction"""
     import hashlib
@@ -123,16 +239,33 @@ def get_transaction_key(description: str, amount: float, date: str = None) -> st
     return f"{clean_desc}_{hash_hex[:8]}"
 
 # Expense categorization logic
-def categorize_expense(description: str, amount: float = None, date: str = None) -> str:
+def categorize_expense(description: str, amount: float = None, date: str = None) -> tuple:
     """
-    Categorize expense based on overrides, keywords, or fallback to hash distribution
+    Categorize expense based on overrides, Zelle recipients, merchant matching, keywords, or fallback to hash distribution
+    Returns tuple of (category_name, status) where status is 'saved', 'override', or 'new'
     """
     # Check for manual overrides first
     if amount is not None:
         transaction_key = get_transaction_key(description, amount, date)
         overrides = load_transaction_overrides()
         if transaction_key in overrides:
-            return overrides[transaction_key]
+            return overrides[transaction_key], 'saved'  # Manual overrides are considered 'saved'
+    
+    # Check for Zelle payments (special handling)
+    if is_zelle_payment(description):
+        recipient = extract_zelle_recipient(description)
+        if recipient:
+            zelle_mappings = load_zelle_recipients()
+            if recipient in zelle_mappings:
+                print(f"📱 Zelle payment to {recipient} categorized as {zelle_mappings[recipient]}")
+                return zelle_mappings[recipient], 'saved'  # Zelle recipient matches are 'saved'
+    
+    # Check for merchant matching (skip for Zelle payments)
+    if not is_zelle_payment(description):
+        merchant_name = extract_merchant_name(description)
+        merchant_mappings = load_merchant_mappings()
+        if merchant_name in merchant_mappings:
+            return merchant_mappings[merchant_name], 'saved'  # Merchant matches are 'saved'
     
     categories = load_categories()
     description_lower = description.lower().strip()
@@ -141,15 +274,15 @@ def categorize_expense(description: str, amount: float = None, date: str = None)
     for category in categories:
         for keyword in category.get('keywords', []):
             if keyword.lower() in description_lower:
-                return category['name']
+                return category['name'], 'saved'  # Keyword matches are 'saved'
     
     # Fallback to hash-based distribution to ensure all categories appear
     category_names = [cat['name'] for cat in categories]
     if category_names:
         hash_value = hash(description_lower) % len(category_names)
-        return category_names[hash_value]
+        return category_names[hash_value], 'new'  # Hash-based assignments are 'new'
     
-    return "Uncategorized"
+    return "Uncategorized", 'new'
 
 @app.get("/")
 async def root():
@@ -253,7 +386,7 @@ async def set_transaction_category(transaction_key: str, category: str):
 
 @app.put("/transactions/{transaction_key}/category")
 async def update_transaction_category_by_key(transaction_key: str, category_data: CategoryUpdateRequest):
-    """Update category for a specific transaction using transaction key"""
+    """Update category for a specific transaction using transaction key and learn from it"""
     try:
         print(f"Received PUT request for transaction_key: {transaction_key}")
         print(f"Category data: {category_data}")
@@ -261,15 +394,53 @@ async def update_transaction_category_by_key(transaction_key: str, category_data
         category = category_data.category
         print(f"Extracted category: {category}")
         
+        # Save the specific transaction override
         overrides = load_transaction_overrides()
         overrides[transaction_key] = category
         save_transaction_overrides(overrides)
         
         print(f"Successfully updated category for {transaction_key} to {category}")
-        return {"message": "Transaction category updated successfully", "transaction_key": transaction_key, "category": category}
+        return {
+            "message": "Transaction category updated successfully", 
+            "transaction_key": transaction_key, 
+            "category": category,
+            "learned_merchant": True  # Signal that we should update similar transactions
+        }
     except Exception as e:
         print(f"Error updating transaction category: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error updating transaction category: {str(e)}")
+
+@app.post("/transactions/{transaction_key}/learn")
+async def learn_from_transaction(transaction_key: str, request_data: dict):
+    """Learn merchant pattern from a transaction and update similar transactions"""
+    try:
+        description = request_data.get('description', '')
+        category = request_data.get('category', '')
+        
+        if not description or not category:
+            raise HTTPException(status_code=400, detail="Description and category are required")
+        
+        print(f"Learning from transaction: {description} -> {category}")
+        
+        # Extract merchant name
+        merchant_name = extract_merchant_name(description)
+        print(f"Extracted merchant name: {merchant_name}")
+        
+        # Save merchant mapping
+        merchant_mappings = load_merchant_mappings()
+        merchant_mappings[merchant_name] = category
+        save_merchant_mappings(merchant_mappings)
+        
+        print(f"Saved merchant mapping: {merchant_name} -> {category}")
+        
+        return {
+            "message": "Merchant pattern learned successfully",
+            "merchant": merchant_name,
+            "category": category
+        }
+    except Exception as e:
+        print(f"Error learning from transaction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error learning from transaction: {str(e)}")
 
 @app.delete("/transactions/{transaction_key}/category")
 async def remove_transaction_category_override(transaction_key: str):
@@ -414,9 +585,16 @@ async def process_expenses(file: UploadFile = File(...)):
         # Add category column with amount and date information
         def categorize_with_context(row):
             date_val = row.get('date', None) if 'date' in df.columns else None
-            return categorize_expense(row['description'], row['amount'], date_val)
+            category, status = categorize_expense(row['description'], row['amount'], date_val)
+            return category
+        
+        def get_status_with_context(row):
+            date_val = row.get('date', None) if 'date' in df.columns else None
+            category, status = categorize_expense(row['description'], row['amount'], date_val)
+            return status
         
         df['category'] = df.apply(categorize_with_context, axis=1)
+        df['status'] = df.apply(get_status_with_context, axis=1)
         
         # Calculate summary statistics using only expenses (negative amounts)
         expenses_df = df[df['amount'] < 0].copy()
@@ -437,8 +615,38 @@ async def process_expenses(file: UploadFile = File(...)):
         # Convert to list of dictionaries for JSON response
         category_data = category_summary.to_dict('records')
         
+        # Create grouped category summary
+        def create_grouped_summary(category_data):
+            categories = load_categories()
+            category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
+            
+            # Group categories by their group classification
+            grouped_data = {}
+            for cat_data in category_data:
+                group = category_to_group.get(cat_data['category'], 'Other')
+                if group not in grouped_data:
+                    grouped_data[group] = {
+                        'group': group,
+                        'total_amount': 0,
+                        'transaction_count': 0,
+                        'categories': []
+                    }
+                
+                grouped_data[group]['total_amount'] += cat_data['total_amount']
+                grouped_data[group]['transaction_count'] += cat_data['transaction_count']
+                grouped_data[group]['categories'].append(cat_data)
+            
+            # Calculate percentages for groups
+            total_amount = sum(group['total_amount'] for group in grouped_data.values())
+            for group in grouped_data.values():
+                group['percentage'] = round((group['total_amount'] / total_amount * 100), 2) if total_amount > 0 else 0
+            
+            return list(grouped_data.values())
+        
+        grouped_category_data = create_grouped_summary(category_data)
+        
         # Transaction details - include date if available
-        transaction_columns = ['description', 'amount', 'category']
+        transaction_columns = ['description', 'amount', 'category', 'status']
         
         # Check if we have date information and add it
         date_column = None
@@ -505,7 +713,8 @@ async def process_expenses(file: UploadFile = File(...)):
             "summary": {
                 "total_expenses": total_expenses,
                 "total_transactions": total_transactions,
-                "categories": category_data
+                "categories": category_data,
+                "grouped_categories": grouped_category_data
             },
             "transactions": transactions,
             "monthly_data": monthly_data,
@@ -514,6 +723,48 @@ async def process_expenses(file: UploadFile = File(...)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+# Zelle recipient management endpoints
+@app.get("/zelle-recipients")
+async def get_zelle_recipients():
+    """Get all Zelle recipient mappings"""
+    try:
+        recipients = load_zelle_recipients()
+        return {"recipients": recipients}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading Zelle recipients: {str(e)}")
+
+@app.post("/zelle-recipients")
+async def add_zelle_recipient(recipient_data: dict):
+    """Add or update a Zelle recipient mapping"""
+    try:
+        recipient_name = recipient_data.get('recipient')
+        category = recipient_data.get('category')
+        
+        if not recipient_name or not category:
+            raise HTTPException(status_code=400, detail="Recipient name and category are required")
+        
+        recipients = load_zelle_recipients()
+        recipients[recipient_name] = category
+        save_zelle_recipients(recipients)
+        
+        return {"message": "Zelle recipient mapping added successfully", "recipient": recipient_name, "category": category}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error adding Zelle recipient: {str(e)}")
+
+@app.delete("/zelle-recipients/{recipient_name}")
+async def delete_zelle_recipient(recipient_name: str):
+    """Delete a Zelle recipient mapping"""
+    try:
+        recipients = load_zelle_recipients()
+        if recipient_name in recipients:
+            del recipients[recipient_name]
+            save_zelle_recipients(recipients)
+            return {"message": "Zelle recipient mapping deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Zelle recipient not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting Zelle recipient: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -125,5 +125,45 @@
       "babysitter",
       "nanny"
     ]
+  },
+  {
+    "id": "groceries",
+    "name": "Groceries",
+    "keywords": []
+  },
+  {
+    "id": "others",
+    "name": "Others",
+    "keywords": []
+  },
+  {
+    "id": "healthcare",
+    "name": "Healthcare",
+    "keywords": []
+  },
+  {
+    "id": "amazon",
+    "name": "Amazon",
+    "keywords": []
+  },
+  {
+    "id": "restaurant",
+    "name": "Restaurant",
+    "keywords": []
+  },
+  {
+    "id": "payroll",
+    "name": "Payroll",
+    "keywords": []
+  },
+  {
+    "id": "savings",
+    "name": "Savings",
+    "keywords": []
+  },
+  {
+    "id": "business",
+    "name": "Business",
+    "keywords": []
   }
 ]

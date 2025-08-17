@@ -14,11 +14,13 @@ const COLORS = [
 
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
-  const [currentPage, setCurrentPage] = useState(1);
-  const transactionsPerPage = 10;
-  const [editingTransaction, setEditingTransaction] = useState(null);
+
   const [categories, setCategories] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [updatingTransaction, setUpdatingTransaction] = useState(null);
+  const [showNewCategoryForm, setShowNewCategoryForm] = useState(null);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryKeywords, setNewCategoryKeywords] = useState('');
 
   if (!data || !data.summary) {
     return null;
@@ -31,16 +33,25 @@ export default function Report({ data, onDownloadPDF }) {
     if (data.transactions) {
       console.log('Received transactions:', data.transactions.slice(0, 2)); // Log first 2 transactions
       
-      // Add fallback transaction keys if missing
+      // Add fallback transaction keys and status if missing
       const transactionsWithKeys = data.transactions.map((transaction, index) => {
+        let updatedTransaction = { ...transaction };
+        
+        // Add fallback transaction key if missing
         if (!transaction.transaction_key) {
-          // Generate a URL-safe fallback key
           const cleanDesc = transaction.description.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
           const fallbackKey = `${cleanDesc || 'transaction'}_${Math.abs(transaction.amount).toString().replace('.', '')}_${index}`;
           console.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
-          return { ...transaction, transaction_key: fallbackKey };
+          updatedTransaction.transaction_key = fallbackKey;
         }
-        return transaction;
+        
+        // Add fallback status if missing
+        if (!transaction.status) {
+          console.warn(`Missing status for transaction ${index}, using fallback: 'new'`);
+          updatedTransaction.status = 'new';
+        }
+        
+        return updatedTransaction;
       });
       
       setTransactions(transactionsWithKeys);
@@ -65,6 +76,13 @@ export default function Report({ data, onDownloadPDF }) {
   const updateTransactionCategory = async (transactionKey, newCategory) => {
     try {
       console.log('Updating transaction:', { transactionKey, newCategory });
+      setUpdatingTransaction(transactionKey);
+      
+      // Find the current transaction to get its description
+      const currentTransaction = transactions.find(t => t.transaction_key === transactionKey);
+      if (!currentTransaction) {
+        throw new Error('Transaction not found');
+      }
       
       const response = await fetch(`http://localhost:8000/transactions/${encodeURIComponent(transactionKey)}/category`, {
         method: 'PUT',
@@ -80,15 +98,21 @@ export default function Report({ data, onDownloadPDF }) {
         const result = await response.json();
         console.log('Success:', result);
         
-        // Update local state
-        setTransactions(prev => 
-          prev.map(t => 
-            t.transaction_key === transactionKey 
-              ? { ...t, category: newCategory }
-              : t
-          )
-        );
-        setEditingTransaction(null);
+        // Learn from this transaction to update similar ones
+        if (result.learned_merchant) {
+          await learnFromTransaction(transactionKey, currentTransaction.description, newCategory);
+        } else {
+          // Just update the current transaction if no learning occurred
+          setTransactions(prev => 
+            prev.map(t => 
+              t.transaction_key === transactionKey 
+                ? { ...t, category: newCategory, status: 'saved' }
+                : t
+            )
+          );
+        }
+        
+        alert('Category updated successfully! Similar transactions have been automatically categorized.');
       } else {
         const errorData = await response.text();
         console.error('Failed to update transaction category:', response.status, errorData);
@@ -97,30 +121,245 @@ export default function Report({ data, onDownloadPDF }) {
     } catch (err) {
       console.error('Error updating transaction category:', err);
       alert(`Error updating category: ${err.message}`);
+    } finally {
+      setUpdatingTransaction(null);
     }
   };
-  
-  // Calculate pagination
-  const totalPages = Math.ceil(transactions.length / transactionsPerPage);
-  const startIndex = (currentPage - 1) * transactionsPerPage;
-  const endIndex = startIndex + transactionsPerPage;
-  const currentTransactions = transactions.slice(startIndex, endIndex);
-  
-  const goToPage = (page) => {
-    setCurrentPage(page);
-  };
-  
-  const goToPrevious = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1);
+
+  const learnFromTransaction = async (transactionKey, description, category) => {
+    try {
+      console.log(`Learning from transaction: ${description} -> ${category}`);
+      
+      // Check if this is a Zelle payment
+      const isZelle = isZellePayment(description);
+      console.log(`Is Zelle payment: ${isZelle}`);
+      
+      if (isZelle) {
+        // Handle Zelle payment learning
+        const recipient = extractZelleRecipient(description);
+        if (recipient) {
+          console.log(`📱 Learning Zelle recipient: ${recipient} -> ${category}`);
+          
+          // Save Zelle recipient mapping
+          const zelleResponse = await fetch(`http://localhost:8000/zelle-recipients`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              recipient: recipient,
+              category: category 
+            }),
+          });
+
+          if (zelleResponse.ok) {
+            console.log(`✅ Zelle recipient mapping saved: ${recipient} -> ${category}`);
+            
+            // Update all Zelle transactions to this recipient
+            setTransactions(prevTransactions => 
+              prevTransactions.map(transaction => {
+                if (isZellePayment(transaction.description)) {
+                  const transactionRecipient = extractZelleRecipient(transaction.description);
+                  if (transactionRecipient === recipient) {
+                    console.log(`✅ ZELLE MATCH! Updating: ${transaction.description}`);
+                    return { 
+                      ...transaction, 
+                      category: category,
+                      status: 'saved'
+                    };
+                  }
+                }
+                return transaction;
+              })
+            );
+          }
+        }
+      } else {
+        // Handle regular merchant learning
+        const learnResponse = await fetch(`http://localhost:8000/transactions/${encodeURIComponent(transactionKey)}/learn`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            description: description,
+            category: category 
+          }),
+        });
+
+        if (!learnResponse.ok) {
+          console.error('Failed to learn from transaction');
+          return;
+        }
+
+        const learnResult = await learnResponse.json();
+        console.log('Learning successful:', learnResult);
+        
+        // Extract merchant name for matching similar transactions
+        const merchantName = extractMerchantName(description);
+        console.log(`Extracted merchant from "${description}": "${merchantName}"`);
+        
+        // Debug: Check all transactions for matches
+        let matchCount = 0;
+        const updatedTransactions = [];
+        
+        // Update all transactions with similar merchant names
+        setTransactions(prevTransactions => 
+          prevTransactions.map(transaction => {
+            // Skip Zelle payments for merchant matching
+            if (isZellePayment(transaction.description)) {
+              return transaction;
+            }
+            
+            const transactionMerchant = extractMerchantName(transaction.description);
+            console.log(`Comparing "${transactionMerchant}" with "${merchantName}" for transaction: ${transaction.description}`);
+            
+            if (transactionMerchant === merchantName) {
+              matchCount++;
+              console.log(`✅ MATCH FOUND! Updating transaction: ${transaction.description}`);
+              updatedTransactions.push(transaction.description);
+              return { 
+                ...transaction, 
+                category: category,
+                status: 'saved'  // Mark as saved since it's now learned
+              };
+            }
+            return transaction;
+          })
+        );
+        
+        console.log(`Total matches found: ${matchCount}`);
+        console.log(`Updated transactions:`, updatedTransactions);
+      }
+      
+    } catch (error) {
+      console.error('Error learning from transaction:', error);
     }
   };
-  
-  const goToNext = () => {
-    if (currentPage < totalPages) {
-      setCurrentPage(currentPage + 1);
+
+  // Helper function to extract merchant name (simplified version of backend logic)
+  const extractMerchantName = (description) => {
+    if (!description) return '';
+    
+    console.log(`🔍 Extracting merchant from: "${description}"`);
+    
+    let desc = description.trim().toUpperCase();
+    console.log(`Step 1 - Uppercase: "${desc}"`);
+    
+    // Remove dates (MM/DD patterns)
+    desc = desc.replace(/\b\d{1,2}\/\d{1,2}\b/g, '');
+    desc = desc.replace(/\b\d{2}\/\d{2}\/\d{2,4}\b/g, '');
+    console.log(`Step 2 - Remove dates: "${desc}"`);
+    
+    // Remove card numbers and reference numbers (6+ digits)
+    desc = desc.replace(/\b\d{6,}\b/g, '');
+    console.log(`Step 3 - Remove long numbers: "${desc}"`);
+    
+    // Remove common state suffixes
+    desc = desc.replace(/\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC)\s*$/g, '');
+    console.log(`Step 4 - Remove states: "${desc}"`);
+    
+    // Remove store numbers and location codes
+    desc = desc.replace(/\s*#\d+\s*/g, ' ');
+    desc = desc.replace(/\s*\d{3,6}\s*$/g, '');
+    console.log(`Step 5 - Remove store numbers: "${desc}"`);
+    
+    // Clean up extra spaces
+    desc = desc.replace(/\s+/g, ' ').trim();
+    console.log(`Step 6 - Clean spaces: "${desc}"`);
+    
+    // Get the main merchant name (first 2-3 words, but prioritize the first word for chains)
+    const words = desc.split(/\s+/).filter(word => word.length > 0);
+    let merchant;
+    
+    if (words.length >= 2) {
+      // For restaurant chains like "CHILI'S BEACON CENTER", take first 2 words
+      // For stores like "WALMART SUPERCENTER", take first 2 words
+      merchant = words.slice(0, 2).join(' ');
+    } else if (words.length === 1) {
+      merchant = words[0];
+    } else {
+      merchant = desc;
+    }
+    
+    console.log(`Final merchant name: "${merchant}"`);
+    return merchant.trim();
+  };
+
+  // Helper functions for Zelle payments
+  const isZellePayment = (description) => {
+    return description.toLowerCase().includes('zelle payment to');
+  };
+
+  const extractZelleRecipient = (description) => {
+    if (!isZellePayment(description)) return null;
+    
+    console.log(`🔍 Extracting Zelle recipient from: "${description}"`);
+    
+    // Extract recipient name - pattern: "Zelle payment to [Name] [phone/numbers]"
+    const match = description.match(/zelle payment to\s+([^0-9]+)/i);
+    if (match) {
+      const recipient = match[1].trim();
+      // Convert to Title Case for consistency
+      const titleCaseRecipient = recipient.split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+      
+      console.log(`📱 Extracted Zelle recipient: "${titleCaseRecipient}"`);
+      return titleCaseRecipient;
+    }
+    
+    return null;
+  };
+
+  const createNewCategory = async (transactionKey) => {
+    if (!newCategoryName.trim()) return;
+
+    try {
+      const keywords = newCategoryKeywords
+        .split(',')
+        .map(k => k.trim())
+        .filter(k => k.length > 0);
+
+      const response = await fetch('http://localhost:8000/categories', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: newCategoryName.trim(),
+          keywords: keywords
+        }),
+      });
+
+      if (response.ok) {
+        // Reload categories
+        await loadCategories();
+        
+        // Update the transaction with the new category
+        await updateTransactionCategory(transactionKey, newCategoryName.trim());
+        
+        // Reset form
+        setNewCategoryName('');
+        setNewCategoryKeywords('');
+        setShowNewCategoryForm(null);
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to create category: ${errorData.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Error creating category:', err);
+      alert(`Error creating category: ${err.message}`);
     }
   };
+
+  const handleCategoryChange = (transactionKey, value) => {
+    if (value === '__NEW_CATEGORY__') {
+      setShowNewCategoryForm(transactionKey);
+    } else {
+      updateTransactionCategory(transactionKey, value);
+    }
+    };
 
   const handleDownloadPDF = async () => {
     try {
@@ -243,38 +482,46 @@ export default function Report({ data, onDownloadPDF }) {
       
       // Add category summary table
       htmlContent += `
-        <h2>Category Summary</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th>Amount</th>
-              <th>Transactions</th>
-              <th>Percentage</th>
-            </tr>
-          </thead>
-          <tbody>
+        <h2>Category Summary by Group</h2>
       `;
       
-      summary.categories.forEach(category => {
-        htmlContent += `
-          <tr>
-            <td>${category.category}</td>
-            <td>${formatCurrency(category.total_amount)}</td>
-            <td>${category.transaction_count}</td>
-            <td>${category.percentage}%</td>
-          </tr>
-        `;
-      });
-      
-      htmlContent += `
-          </tbody>
-        </table>
-      `;
+      if (summary.grouped_categories) {
+        summary.grouped_categories.forEach(group => {
+          htmlContent += `
+            <h3>${group.group} - ${formatCurrency(group.total_amount)} (${group.percentage}%)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Amount</th>
+                  <th>Transactions</th>
+                  <th>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+          `;
+          
+          group.categories.forEach(category => {
+            htmlContent += `
+              <tr>
+                <td>${category.category}</td>
+                <td>${formatCurrency(category.total_amount)}</td>
+                <td>${category.transaction_count}</td>
+                <td>${category.percentage}%</td>
+              </tr>
+            `;
+          });
+          
+          htmlContent += `
+              </tbody>
+            </table>
+          `;
+        });
+      }
       
       // Add recent transactions
       htmlContent += `
-        <h2>Recent Transactions (${Math.min(10, transactions.length)} of ${transactions.length})</h2>
+        <h2>All Transactions (${transactions.length})</h2>
         <table>
           <thead>
             <tr>
@@ -287,13 +534,14 @@ export default function Report({ data, onDownloadPDF }) {
           <tbody>
       `;
       
-      transactions.slice(0, 10).forEach(transaction => {
+      transactions.forEach(transaction => {
+        const statusText = transaction.status === 'saved' ? 'Saved' : 'New';
         htmlContent += `
           <tr>
             <td>${transaction.date || 'N/A'}</td>
             <td>${transaction.description}</td>
             <td>${formatCurrency(transaction.amount)}</td>
-            <td>${transaction.category}</td>
+            <td>${statusText} - ${transaction.category}</td>
           </tr>
         `;
       });
@@ -482,15 +730,12 @@ export default function Report({ data, onDownloadPDF }) {
 
 
 
-        {/* Recent Transactions */}
+        {/* All Transactions */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xl font-semibold text-gray-900">
-              Transactions ({startIndex + 1}-{Math.min(endIndex, transactions.length)} of {transactions.length})
+              All Transactions ({transactions.length})
             </h3>
-            <div className="text-sm text-gray-500">
-              Page {currentPage} of {totalPages}
-            </div>
           </div>
           
           <div className="overflow-x-auto">
@@ -509,14 +754,11 @@ export default function Report({ data, onDownloadPDF }) {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Category
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {currentTransactions.map((transaction, index) => (
-                  <tr key={startIndex + index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                {transactions.map((transaction, index) => (
+                  <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {transaction.date || 'N/A'}
                     </td>
@@ -527,42 +769,76 @@ export default function Report({ data, onDownloadPDF }) {
                       {formatCurrency(transaction.amount)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {editingTransaction === transaction.transaction_key ? (
-                        <select
-                          value={transaction.category}
-                          onChange={(e) => updateTransactionCategory(transaction.transaction_key, e.target.value)}
-                          className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          autoFocus
-                        >
-                          {categories.map((cat) => (
-                            <option key={cat.id} value={cat.name}>
-                              {cat.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {transaction.category}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {editingTransaction === transaction.transaction_key ? (
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => setEditingTransaction(null)}
-                            className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
-                          >
-                            Cancel
-                          </button>
+                      {showNewCategoryForm === transaction.transaction_key ? (
+                        <div className="space-y-2 min-w-[200px]">
+                          <input
+                            type="text"
+                            placeholder="Category name"
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                            className="w-full text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            autoFocus
+                          />
+                          <input
+                            type="text"
+                            placeholder="Keywords (comma-separated)"
+                            value={newCategoryKeywords}
+                            onChange={(e) => setNewCategoryKeywords(e.target.value)}
+                            className="w-full text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <div className="flex space-x-1">
+                            <button
+                              onClick={() => createNewCategory(transaction.transaction_key)}
+                              className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200"
+                            >
+                              Create
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowNewCategoryForm(null);
+                                setNewCategoryName('');
+                                setNewCategoryKeywords('');
+                              }}
+                              className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => setEditingTransaction(transaction.transaction_key)}
-                          className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
-                        >
-                          Edit Category
-                        </button>
+                        <div className="flex items-center space-x-2">
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            transaction.status === 'saved' 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {transaction.status === 'saved' ? 'Saved' : 'New'}
+                          </span>
+                          <select
+                            value={transaction.category}
+                            onChange={(e) => handleCategoryChange(transaction.transaction_key, e.target.value)}
+                            disabled={updatingTransaction === transaction.transaction_key}
+                            className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[120px] ${
+                              updatingTransaction === transaction.transaction_key 
+                                ? 'bg-gray-100 cursor-wait opacity-75' 
+                                : 'bg-blue-50 hover:bg-blue-100 focus:bg-white'
+                            }`}
+                          >
+                            {categories
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map((cat) => (
+                                <option key={cat.id} value={cat.name}>
+                                  {cat.name}
+                                </option>
+                              ))}
+                            <option value="__NEW_CATEGORY__" className="text-green-600 font-medium">
+                              + Add New Category
+                            </option>
+                          </select>
+                          {updatingTransaction === transaction.transaction_key && (
+                            <span className="ml-2 text-xs text-gray-500">Saving...</span>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -570,132 +846,66 @@ export default function Report({ data, onDownloadPDF }) {
               </tbody>
             </table>
           </div>
-          
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 mt-4">
-              <div className="flex flex-1 justify-between sm:hidden">
-                <button
-                  onClick={goToPrevious}
-                  disabled={currentPage === 1}
-                  className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={goToNext}
-                  disabled={currentPage === totalPages}
-                  className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-              <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm text-gray-700">
-                    Showing <span className="font-medium">{startIndex + 1}</span> to{' '}
-                    <span className="font-medium">{Math.min(endIndex, transactions.length)}</span> of{' '}
-                    <span className="font-medium">{transactions.length}</span> transactions
-                  </p>
-                </div>
-                <div>
-                  <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
-                    <button
-                      onClick={goToPrevious}
-                      disabled={currentPage === 1}
-                      className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span className="sr-only">Previous</span>
-                      <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                    
-                    {/* Page Numbers */}
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum;
-                      if (totalPages <= 5) {
-                        pageNum = i + 1;
-                      } else if (currentPage <= 3) {
-                        pageNum = i + 1;
-                      } else if (currentPage >= totalPages - 2) {
-                        pageNum = totalPages - 4 + i;
-                      } else {
-                        pageNum = currentPage - 2 + i;
-                      }
-                      
-                      return (
-                        <button
-                          key={pageNum}
-                          onClick={() => goToPage(pageNum)}
-                          className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
-                            pageNum === currentPage
-                              ? 'z-10 bg-blue-600 text-white focus:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600'
-                              : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0'
-                          }`}
-                        >
-                          {pageNum}
-                        </button>
-                      );
-                    })}
-                    
-                    <button
-                      onClick={goToNext}
-                      disabled={currentPage === totalPages}
-                      className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span className="sr-only">Next</span>
-                      <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  </nav>
-                </div>
-              </div>
-            </div>
-          )}
+
         </div>
 
         {/* Category Summary - moved below transactions */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Summary</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Transactions
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Percentage
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {summary.categories.map((category, index) => (
-                  <tr key={category.category} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {category.category}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatCurrency(category.total_amount)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {category.transaction_count}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {category.percentage}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Summary by Group</h3>
+          <div className="space-y-6">
+            {summary.grouped_categories && summary.grouped_categories.map((group, groupIndex) => (
+              <div key={groupIndex} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="text-lg font-medium text-gray-800">{group.group}</h4>
+                  <div className="text-right">
+                    <div className="text-lg font-semibold text-gray-900">
+                      {formatCurrency(group.total_amount)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {group.percentage}% • {group.transaction_count} transactions
+                    </div>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Category
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Amount
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Transactions
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Percentage
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {group.categories.map((category, index) => (
+                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {category.category}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrency(category.total_amount)}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {category.transaction_count}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                            {category.percentage}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
