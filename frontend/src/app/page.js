@@ -3,11 +3,13 @@
 import { useState } from 'react';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
+import CategoryManager from './components/CategoryManager';
 
 export default function Home() {
   const [reportData, setReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
 
   const handleFileUpload = async (file) => {
     setIsLoading(true);
@@ -57,14 +59,22 @@ export default function Home() {
                 <p className="text-gray-600">Expense Analysis & Reporting</p>
               </div>
             </div>
-            {reportData && (
+            <div className="flex space-x-3">
               <button
-                onClick={handleReset}
-                className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                onClick={() => setShowCategoryManager(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
               >
-                Upload New File
+                Manage Categories
               </button>
-            )}
+              {reportData && (
+                <button
+                  onClick={handleReset}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  Upload New File
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -110,6 +120,12 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Category Manager Modal */}
+      <CategoryManager 
+        isOpen={showCategoryManager}
+        onClose={() => setShowCategoryManager(false)}
+      />
     </div>
   );
 }

@@ -1,0 +1,129 @@
+[
+  {
+    "id": "mortgage",
+    "name": "Mortgage",
+    "keywords": [
+      "mortgage",
+      "home loan"
+    ]
+  },
+  {
+    "id": "hoa",
+    "name": "HOA",
+    "keywords": [
+      "hoa",
+      "homeowners",
+      "association"
+    ]
+  },
+  {
+    "id": "city_gas",
+    "name": "City Gas",
+    "keywords": [
+      "city gas",
+      "gas utility",
+      "natural gas"
+    ]
+  },
+  {
+    "id": "fpl",
+    "name": "FPL",
+    "keywords": [
+      "fpl",
+      "florida power",
+      "electric"
+    ]
+  },
+  {
+    "id": "internet",
+    "name": "Internet",
+    "keywords": [
+      "internet",
+      "wifi",
+      "broadband",
+      "comcast",
+      "xfinity"
+    ]
+  },
+  {
+    "id": "phone",
+    "name": "Phone",
+    "keywords": [
+      "phone",
+      "mobile",
+      "cell",
+      "verizon",
+      "att",
+      "t-mobile"
+    ]
+  },
+  {
+    "id": "toll",
+    "name": "Toll",
+    "keywords": [
+      "toll",
+      "sunpass",
+      "ezpass",
+      "turnpike"
+    ]
+  },
+  {
+    "id": "gas_station",
+    "name": "Gas Station",
+    "keywords": [
+      "gas station",
+      "shell",
+      "bp",
+      "exxon",
+      "chevron",
+      "fuel"
+    ]
+  },
+  {
+    "id": "student_loan",
+    "name": "Student Loan",
+    "keywords": [
+      "student loan",
+      "education",
+      "navient",
+      "sallie mae"
+    ]
+  },
+  {
+    "id": "car_insurance",
+    "name": "Car Insurance",
+    "keywords": [
+      "car insurance",
+      "auto insurance",
+      "geico",
+      "state farm",
+      "progressive"
+    ]
+  },
+  {
+    "id": "credit_card_jenny",
+    "name": "Credit Card Jenny",
+    "keywords": [
+      "jenny",
+      "credit card jenny"
+    ]
+  },
+  {
+    "id": "credit_card_ivan",
+    "name": "Credit Card Ivan",
+    "keywords": [
+      "ivan",
+      "credit card ivan"
+    ]
+  },
+  {
+    "id": "childcare",
+    "name": "ChildCare",
+    "keywords": [
+      "childcare",
+      "daycare",
+      "babysitter",
+      "nanny"
+    ]
+  }
+]

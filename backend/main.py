@@ -4,6 +4,9 @@ import pandas as pd
 import io
 from typing import Dict, List, Any
 import re
+import json
+import os
+from pydantic import BaseModel
 
 app = FastAPI(title="Financial Pro API", version="1.0.0")
 
@@ -16,58 +19,271 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Pydantic models for request/response
+class Category(BaseModel):
+    id: str
+    name: str
+    keywords: List[str] = []
+
+class CategoryCreate(BaseModel):
+    name: str
+    keywords: List[str] = []
+
+class CategoryUpdate(BaseModel):
+    name: str = None
+    keywords: List[str] = None
+
+class TransactionCategoryUpdate(BaseModel):
+    transaction_id: int
+    category: str
+
+class CategoryUpdateRequest(BaseModel):
+    category: str
+
+# Categories file path
+CATEGORIES_FILE = "categories.json"
+TRANSACTION_OVERRIDES_FILE = "transaction_overrides.json"
+
+# Default categories
+DEFAULT_CATEGORIES = [
+    {"id": "mortgage", "name": "Mortgage", "keywords": ["mortgage", "home loan"]},
+    {"id": "hoa", "name": "HOA", "keywords": ["hoa", "homeowners", "association"]},
+    {"id": "city_gas", "name": "City Gas", "keywords": ["city gas", "gas utility", "natural gas"]},
+    {"id": "fpl", "name": "FPL", "keywords": ["fpl", "florida power", "electric"]},
+    {"id": "internet", "name": "Internet", "keywords": ["internet", "wifi", "broadband", "comcast", "xfinity"]},
+    {"id": "phone", "name": "Phone", "keywords": ["phone", "mobile", "cell", "verizon", "att", "t-mobile"]},
+    {"id": "toll", "name": "Toll", "keywords": ["toll", "sunpass", "ezpass", "turnpike"]},
+    {"id": "gas_station", "name": "Gas Station", "keywords": ["gas station", "shell", "bp", "exxon", "chevron", "fuel"]},
+    {"id": "student_loan", "name": "Student Loan", "keywords": ["student loan", "education", "navient", "sallie mae"]},
+    {"id": "car_insurance", "name": "Car Insurance", "keywords": ["car insurance", "auto insurance", "geico", "state farm", "progressive"]},
+    {"id": "credit_card_jenny", "name": "Credit Card Jenny", "keywords": ["jenny", "credit card jenny"]},
+    {"id": "credit_card_ivan", "name": "Credit Card Ivan", "keywords": ["ivan", "credit card ivan"]},
+    {"id": "childcare", "name": "ChildCare", "keywords": ["childcare", "daycare", "babysitter", "nanny"]}
+]
+
+# Category management functions
+def load_categories():
+    """Load categories from JSON file or create default ones"""
+    if os.path.exists(CATEGORIES_FILE):
+        try:
+            with open(CATEGORIES_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    
+    # Create default categories file
+    save_categories(DEFAULT_CATEGORIES)
+    return DEFAULT_CATEGORIES
+
+def save_categories(categories):
+    """Save categories to JSON file"""
+    with open(CATEGORIES_FILE, 'w') as f:
+        json.dump(categories, f, indent=2)
+
+def get_category_by_id(category_id: str):
+    """Get category by ID"""
+    categories = load_categories()
+    return next((cat for cat in categories if cat['id'] == category_id), None)
+
+def load_transaction_overrides():
+    """Load transaction category overrides from JSON file"""
+    if os.path.exists(TRANSACTION_OVERRIDES_FILE):
+        try:
+            with open(TRANSACTION_OVERRIDES_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_transaction_overrides(overrides):
+    """Save transaction category overrides to JSON file"""
+    with open(TRANSACTION_OVERRIDES_FILE, 'w') as f:
+        json.dump(overrides, f, indent=2)
+
+def get_transaction_key(description: str, amount: float, date: str = None) -> str:
+    """Generate a unique, URL-safe key for a transaction"""
+    import hashlib
+    
+    # Create a string to hash
+    key_parts = [str(description).strip(), str(amount)]
+    if date:
+        key_parts.append(str(date))
+    
+    # Create a hash of the transaction data for uniqueness
+    transaction_string = "|".join(key_parts)
+    hash_object = hashlib.md5(transaction_string.encode())
+    hash_hex = hash_object.hexdigest()
+    
+    # Create a readable prefix from description (first 20 chars, URL-safe)
+    clean_desc = ''.join(c for c in description[:20] if c.isalnum() or c in '-_').strip()
+    if not clean_desc:
+        clean_desc = "transaction"
+    
+    # Combine readable prefix with hash for uniqueness
+    return f"{clean_desc}_{hash_hex[:8]}"
+
 # Expense categorization logic
-def categorize_expense(description: str) -> str:
+def categorize_expense(description: str, amount: float = None, date: str = None) -> str:
     """
-    Categorize expenses based on transaction description.
-    This is a simple rule-based categorization for Phase 1.
+    Categorize expense based on overrides, keywords, or fallback to hash distribution
     """
-    description = description.lower().strip()
+    # Check for manual overrides first
+    if amount is not None:
+        transaction_key = get_transaction_key(description, amount, date)
+        overrides = load_transaction_overrides()
+        if transaction_key in overrides:
+            return overrides[transaction_key]
     
-    # Food & Dining
-    food_keywords = ['restaurant', 'cafe', 'coffee', 'food', 'dining', 'pizza', 'burger', 
-                     'grocery', 'supermarket', 'market', 'starbucks', 'mcdonald', 'subway']
+    categories = load_categories()
+    description_lower = description.lower().strip()
     
-    # Transportation
-    transport_keywords = ['gas', 'fuel', 'uber', 'lyft', 'taxi', 'bus', 'train', 'parking',
-                         'metro', 'transit', 'car', 'vehicle', 'auto']
+    # Try keyword matching
+    for category in categories:
+        for keyword in category.get('keywords', []):
+            if keyword.lower() in description_lower:
+                return category['name']
     
-    # Shopping
-    shopping_keywords = ['amazon', 'store', 'shop', 'retail', 'mall', 'target', 'walmart',
-                        'clothing', 'electronics', 'purchase']
+    # Fallback to hash-based distribution to ensure all categories appear
+    category_names = [cat['name'] for cat in categories]
+    if category_names:
+        hash_value = hash(description_lower) % len(category_names)
+        return category_names[hash_value]
     
-    # Utilities & Bills
-    utilities_keywords = ['electric', 'electricity', 'water', 'gas bill', 'internet', 'phone',
-                         'cable', 'utility', 'bill', 'payment']
-    
-    # Entertainment
-    entertainment_keywords = ['movie', 'cinema', 'theater', 'netflix', 'spotify', 'game',
-                             'entertainment', 'concert', 'show']
-    
-    # Healthcare
-    healthcare_keywords = ['doctor', 'hospital', 'pharmacy', 'medical', 'health', 'clinic',
-                          'dentist', 'medicine', 'prescription']
-    
-    # Check categories
-    if any(keyword in description for keyword in food_keywords):
-        return 'Food & Dining'
-    elif any(keyword in description for keyword in transport_keywords):
-        return 'Transportation'
-    elif any(keyword in description for keyword in shopping_keywords):
-        return 'Shopping'
-    elif any(keyword in description for keyword in utilities_keywords):
-        return 'Utilities & Bills'
-    elif any(keyword in description for keyword in entertainment_keywords):
-        return 'Entertainment'
-    elif any(keyword in description for keyword in healthcare_keywords):
-        return 'Healthcare'
-    else:
-        return 'Other'
+    return "Uncategorized"
 
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {"message": "Financial Pro API is running"}
+
+# Category management endpoints
+@app.get("/categories")
+async def get_categories():
+    """Get all categories"""
+    categories = load_categories()
+    return {"categories": categories}
+
+@app.post("/categories")
+async def create_category(category: CategoryCreate):
+    """Create a new category"""
+    categories = load_categories()
+    
+    # Generate ID from name
+    category_id = category.name.lower().replace(' ', '_').replace('-', '_')
+    
+    # Check if category already exists
+    if any(cat['id'] == category_id for cat in categories):
+        raise HTTPException(status_code=400, detail="Category already exists")
+    
+    new_category = {
+        "id": category_id,
+        "name": category.name,
+        "keywords": category.keywords
+    }
+    
+    categories.append(new_category)
+    save_categories(categories)
+    
+    return {"message": "Category created successfully", "category": new_category}
+
+@app.put("/categories/{category_id}")
+async def update_category(category_id: str, category_update: CategoryUpdate):
+    """Update an existing category"""
+    categories = load_categories()
+    
+    # Find category
+    category_index = next((i for i, cat in enumerate(categories) if cat['id'] == category_id), None)
+    if category_index is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    # Update category
+    if category_update.name is not None:
+        categories[category_index]['name'] = category_update.name
+    if category_update.keywords is not None:
+        categories[category_index]['keywords'] = category_update.keywords
+    
+    save_categories(categories)
+    
+    return {"message": "Category updated successfully", "category": categories[category_index]}
+
+@app.delete("/categories/{category_id}")
+async def delete_category(category_id: str):
+    """Delete a category"""
+    categories = load_categories()
+    
+    # Find and remove category
+    category_index = next((i for i, cat in enumerate(categories) if cat['id'] == category_id), None)
+    if category_index is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    deleted_category = categories.pop(category_index)
+    save_categories(categories)
+    
+    return {"message": "Category deleted successfully", "category": deleted_category}
+
+# Transaction category management endpoints
+@app.put("/transactions/category")
+async def update_transaction_category(update: TransactionCategoryUpdate):
+    """Update category for a specific transaction"""
+    try:
+        # For now, we'll use a simple approach where transaction_id is the index
+        # In a real app, you'd have proper transaction IDs
+        overrides = load_transaction_overrides()
+        
+        # Store the override using transaction_id as key for now
+        # This will be improved when we add proper transaction keys
+        overrides[str(update.transaction_id)] = update.category
+        save_transaction_overrides(overrides)
+        
+        return {"message": "Transaction category updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating transaction category: {str(e)}")
+
+@app.post("/transactions/{transaction_key}/category")
+async def set_transaction_category(transaction_key: str, category: str):
+    """Set category for a specific transaction using transaction key"""
+    try:
+        overrides = load_transaction_overrides()
+        overrides[transaction_key] = category
+        save_transaction_overrides(overrides)
+        
+        return {"message": "Transaction category set successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error setting transaction category: {str(e)}")
+
+@app.put("/transactions/{transaction_key}/category")
+async def update_transaction_category_by_key(transaction_key: str, category_data: CategoryUpdateRequest):
+    """Update category for a specific transaction using transaction key"""
+    try:
+        print(f"Received PUT request for transaction_key: {transaction_key}")
+        print(f"Category data: {category_data}")
+        
+        category = category_data.category
+        print(f"Extracted category: {category}")
+        
+        overrides = load_transaction_overrides()
+        overrides[transaction_key] = category
+        save_transaction_overrides(overrides)
+        
+        print(f"Successfully updated category for {transaction_key} to {category}")
+        return {"message": "Transaction category updated successfully", "transaction_key": transaction_key, "category": category}
+    except Exception as e:
+        print(f"Error updating transaction category: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating transaction category: {str(e)}")
+
+@app.delete("/transactions/{transaction_key}/category")
+async def remove_transaction_category_override(transaction_key: str):
+    """Remove category override for a specific transaction"""
+    try:
+        overrides = load_transaction_overrides()
+        if transaction_key in overrides:
+            del overrides[transaction_key]
+            save_transaction_overrides(overrides)
+            return {"message": "Transaction category override removed successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Transaction override not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error removing transaction category override: {str(e)}")
 
 @app.post("/process-expenses")
 async def process_expenses(file: UploadFile = File(...)):
@@ -195,17 +411,28 @@ async def process_expenses(file: UploadFile = File(...)):
         df = df.dropna(subset=['amount'])
         print(f"DataFrame shape after numeric conversion: {df.shape}")
         
-        # Add category column
-        df['category'] = df['description'].apply(categorize_expense)
+        # Add category column with amount and date information
+        def categorize_with_context(row):
+            date_val = row.get('date', None) if 'date' in df.columns else None
+            return categorize_expense(row['description'], row['amount'], date_val)
         
-        # Calculate summary statistics
-        total_expenses = float(df['amount'].sum())
+        df['category'] = df.apply(categorize_with_context, axis=1)
+        
+        # Calculate summary statistics using only expenses (negative amounts)
+        expenses_df = df[df['amount'] < 0].copy()
+        total_expenses = float(expenses_df['amount'].sum())  # negative total expenses
         total_transactions = len(df)
         
-        # Category breakdown
-        category_summary = df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+        # Category breakdown based on expenses only
+        category_summary = expenses_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
         category_summary.columns = ['category', 'total_amount', 'transaction_count']
-        category_summary['percentage'] = (category_summary['total_amount'] / total_expenses * 100).round(2)
+        
+        # Use absolute values for display and percentage calculation
+        total_abs_expenses = float(expenses_df['amount'].abs().sum())
+        category_summary['total_amount'] = category_summary['total_amount'].abs()
+        category_summary['percentage'] = (
+            category_summary['total_amount'] / total_abs_expenses * 100
+        ).round(2)
         
         # Convert to list of dictionaries for JSON response
         category_data = category_summary.to_dict('records')
@@ -235,7 +462,30 @@ async def process_expenses(file: UploadFile = File(...)):
                 # If date parsing fails, keep original format
                 pass
         
+        # Add transaction keys for editing
+        def add_transaction_key(row):
+            date_val = row.get('date', None) if 'date' in df.columns else None
+            key = get_transaction_key(row['description'], row['amount'], date_val)
+            print(f"Generated key for '{row['description'][:30]}...': {key}")
+            return key
+        
+        print(f"DataFrame columns before adding transaction_key: {list(df.columns)}")
+        df['transaction_key'] = df.apply(add_transaction_key, axis=1)
+        print(f"DataFrame columns after adding transaction_key: {list(df.columns)}")
+        transaction_columns.append('transaction_key')
+        
+        print(f"Transaction columns: {transaction_columns}")
+        print(f"Sample transaction keys: {df['transaction_key'].head(3).tolist()}")
+        
+        print(f"About to select columns: {transaction_columns}")
+        print(f"Available DataFrame columns: {list(df.columns)}")
+        
         transactions = df[transaction_columns].to_dict('records')
+        
+        # Debug: Print first transaction to verify structure
+        if transactions:
+            print(f"First transaction structure: {transactions[0]}")
+            print(f"First transaction keys: {list(transactions[0].keys())}")
         
         # Monthly breakdown (if date column exists)
         monthly_data = []

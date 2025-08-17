@@ -1,25 +1,104 @@
 'use client';
 
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
 const COLORS = [
   '#0088FE', '#00C49F', '#FFBB28', '#FF8042', 
-  '#8884D8', '#82CA9D', '#FFC658', '#FF7C7C'
+  '#8884D8', '#82CA9D', '#FFC658', '#FF7C7C',
+  '#A28BD4', '#F48FB1', '#81C784', '#FFB74D',
+  '#64B5F6'
 ];
 
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
   const [currentPage, setCurrentPage] = useState(1);
   const transactionsPerPage = 10;
+  const [editingTransaction, setEditingTransaction] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [transactions, setTransactions] = useState([]);
 
   if (!data || !data.summary) {
     return null;
   }
 
-  const { summary, transactions, monthly_data } = data;
+  const { summary, monthly_data } = data;
+
+  // Initialize transactions state when data changes
+  useEffect(() => {
+    if (data.transactions) {
+      console.log('Received transactions:', data.transactions.slice(0, 2)); // Log first 2 transactions
+      
+      // Add fallback transaction keys if missing
+      const transactionsWithKeys = data.transactions.map((transaction, index) => {
+        if (!transaction.transaction_key) {
+          // Generate a URL-safe fallback key
+          const cleanDesc = transaction.description.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
+          const fallbackKey = `${cleanDesc || 'transaction'}_${Math.abs(transaction.amount).toString().replace('.', '')}_${index}`;
+          console.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
+          return { ...transaction, transaction_key: fallbackKey };
+        }
+        return transaction;
+      });
+      
+      setTransactions(transactionsWithKeys);
+    }
+  }, [data]);
+
+  // Load categories for the dropdown
+  useEffect(() => {
+    loadCategories();
+  }, []);
+
+  const loadCategories = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/categories');
+      const data = await response.json();
+      setCategories(data.categories);
+    } catch (err) {
+      console.error('Failed to load categories:', err);
+    }
+  };
+
+  const updateTransactionCategory = async (transactionKey, newCategory) => {
+    try {
+      console.log('Updating transaction:', { transactionKey, newCategory });
+      
+      const response = await fetch(`http://localhost:8000/transactions/${encodeURIComponent(transactionKey)}/category`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ category: newCategory }),
+      });
+
+      console.log('Response status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Success:', result);
+        
+        // Update local state
+        setTransactions(prev => 
+          prev.map(t => 
+            t.transaction_key === transactionKey 
+              ? { ...t, category: newCategory }
+              : t
+          )
+        );
+        setEditingTransaction(null);
+      } else {
+        const errorData = await response.text();
+        console.error('Failed to update transaction category:', response.status, errorData);
+        alert(`Failed to update category: ${response.status} - ${errorData}`);
+      }
+    } catch (err) {
+      console.error('Error updating transaction category:', err);
+      alert(`Error updating category: ${err.message}`);
+    }
+  };
   
   // Calculate pagination
   const totalPages = Math.ceil(transactions.length / transactionsPerPage);
@@ -401,111 +480,7 @@ export default function Report({ data, onDownloadPDF }) {
           </div>
         </div>
 
-        {/* Charts Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-          {/* Pie Chart */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h3 className="text-xl font-semibold text-gray-900 mb-4">Expenses by Category</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={summary.categories}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ category, percentage }) => `${category}: ${percentage}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="total_amount"
-                >
-                  {summary.categories.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => formatCurrency(value)} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
 
-          {/* Bar Chart */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Breakdown</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={summary.categories}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="category" 
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                  fontSize={12}
-                />
-                <YAxis tickFormatter={(value) => `$${value.toLocaleString()}`} />
-                <Tooltip formatter={(value) => formatCurrency(value)} />
-                <Bar dataKey="total_amount" fill="#3B82F6" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Monthly Trend (if available) */}
-        {monthly_data && monthly_data.length > 0 && (
-          <div className="bg-white rounded-lg border border-gray-200 p-6 mb-8">
-            <h3 className="text-xl font-semibold text-gray-900 mb-4">Monthly Trend</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={monthly_data}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month_year" />
-                <YAxis tickFormatter={(value) => `$${value.toLocaleString()}`} />
-                <Tooltip formatter={(value) => formatCurrency(value)} />
-                <Bar dataKey="amount" fill="#10B981" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* Category Details Table */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6 mb-8">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Summary</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Transactions
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Percentage
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {summary.categories.map((category, index) => (
-                  <tr key={category.category} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {category.category}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatCurrency(category.total_amount)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {category.transaction_count}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {category.percentage}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
         {/* Recent Transactions */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -534,6 +509,9 @@ export default function Report({ data, onDownloadPDF }) {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Category
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -549,9 +527,43 @@ export default function Report({ data, onDownloadPDF }) {
                       {formatCurrency(transaction.amount)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        {transaction.category}
-                      </span>
+                      {editingTransaction === transaction.transaction_key ? (
+                        <select
+                          value={transaction.category}
+                          onChange={(e) => updateTransactionCategory(transaction.transaction_key, e.target.value)}
+                          className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoFocus
+                        >
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={cat.name}>
+                              {cat.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {transaction.category}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {editingTransaction === transaction.transaction_key ? (
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => setEditingTransaction(null)}
+                            className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setEditingTransaction(transaction.transaction_key)}
+                          className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
+                        >
+                          Edit Category
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -642,6 +654,49 @@ export default function Report({ data, onDownloadPDF }) {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Category Summary - moved below transactions */}
+        <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Summary</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Category
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Amount
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Transactions
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Percentage
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {summary.categories.map((category, index) => (
+                  <tr key={category.category} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {category.category}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {formatCurrency(category.total_amount)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {category.transaction_count}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {category.percentage}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
