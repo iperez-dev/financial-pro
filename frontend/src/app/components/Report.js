@@ -256,30 +256,45 @@ export default function Report({ data, onDownloadPDF }) {
     console.log(`Step 3 - Remove long numbers: "${desc}"`);
     
     // Remove common state suffixes
-    desc = desc.replace(/\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC)\s*$/g, '');
+    desc = desc.replace(/\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC|WA)\s*$/g, '');
     console.log(`Step 4 - Remove states: "${desc}"`);
     
-    // Remove store numbers and location codes
-    desc = desc.replace(/\s*#\d+\s*/g, ' ');
-    desc = desc.replace(/\s*\d{3,6}\s*$/g, '');
+    // Remove store numbers and location codes (improved patterns)
+    desc = desc.replace(/\s*#\d+\s*/g, ' ');  // Remove #03, #05 patterns
+    desc = desc.replace(/\s+\d{3,6}\s*/g, ' ');  // Remove 03655, 05924 patterns (not just at end)
     console.log(`Step 5 - Remove store numbers: "${desc}"`);
+    
+    // Remove Amazon transaction IDs and similar patterns
+    desc = desc.replace(/\*[A-Z0-9]{6,}/g, '');  // Remove *LH1XA4I, *0Q6L99D, *AB9Q32ZG3
+    desc = desc.replace(/MKTPL\*[A-Z0-9]+/g, 'MKTPL');  // Simplify AMAZON MKTPL*XXX to AMAZON MKTPL
+    console.log(`Step 6 - Remove transaction IDs: "${desc}"`);
+    
+    // Remove common suffixes that aren't merchant names
+    desc = desc.replace(/\s+AMZN\.COM\/BILL.*$/g, '');  // Remove Amzn.com/bill WA
+    desc = desc.replace(/\s+MIAMI.*$/g, '');  // Remove MIAMI and everything after
+    console.log(`Step 7 - Remove common suffixes: "${desc}"`);
     
     // Clean up extra spaces
     desc = desc.replace(/\s+/g, ' ').trim();
-    console.log(`Step 6 - Clean spaces: "${desc}"`);
+    console.log(`Step 8 - Clean spaces: "${desc}"`);
     
-    // Get the main merchant name (first 2-3 words, but prioritize the first word for chains)
-    const words = desc.split(/\s+/).filter(word => word.length > 0);
+    // Special handling for known merchant patterns
     let merchant;
-    
-    if (words.length >= 2) {
-      // For restaurant chains like "CHILI'S BEACON CENTER", take first 2 words
-      // For stores like "WALMART SUPERCENTER", take first 2 words
-      merchant = words.slice(0, 2).join(' ');
-    } else if (words.length === 1) {
-      merchant = words[0];
+    if (desc.includes('CVS') && desc.includes('PHARMACY')) {
+      merchant = 'CVS/PHARMACY';
+    } else if (desc.includes('AMAZON')) {
+      // Normalize all Amazon transactions to just "AMAZON" for consistency
+      merchant = 'AMAZON';
     } else {
-      merchant = desc;
+      // Get the main merchant name (first 2 words for consistency)
+      const words = desc.split(/\s+/).filter(word => word.length > 0);
+      if (words.length >= 2) {
+        merchant = words.slice(0, 2).join(' ');
+      } else if (words.length === 1) {
+        merchant = words[0];
+      } else {
+        merchant = desc;
+      }
     }
     
     console.log(`Final merchant name: "${merchant}"`);
@@ -468,21 +483,62 @@ export default function Report({ data, onDownloadPDF }) {
         <div class="summary-card">
           <h3>Total Expenses</h3>
           <p>${formatCurrency(summary.total_expenses)}</p>
+          <small>${summary.expense_transactions} transactions</small>
+        </div>
+        <div class="summary-card">
+          <h3>Total Income</h3>
+          <p>${formatCurrency(summary.total_income || 0)}</p>
+          <small>${summary.income_transactions || 0} transactions</small>
+        </div>
+        <div class="summary-card">
+          <h3>Net Amount</h3>
+          <p>${formatCurrency((summary.total_income || 0) + summary.total_expenses)}</p>
+          <small>Income - Expenses</small>
         </div>
         <div class="summary-card">
           <h3>Total Transactions</h3>
           <p>${summary.total_transactions}</p>
-        </div>
-        <div class="summary-card">
-          <h3>Categories</h3>
-          <p>${summary.categories.length}</p>
+          <small>All transactions</small>
         </div>
       `;
       htmlContent += '</div>';
       
-      // Add category summary table
+      // Add income summary if available
+      if (summary.income_categories && summary.income_categories.length > 0) {
+        htmlContent += `
+          <h2>Income Summary</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Income Type</th>
+                <th>Amount</th>
+                <th>Transactions</th>
+                <th>Percentage</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        
+        summary.income_categories.forEach(income => {
+          htmlContent += `
+            <tr>
+              <td>${income.category}</td>
+              <td>${formatCurrency(income.total_amount)}</td>
+              <td>${income.transaction_count}</td>
+              <td>${income.percentage}%</td>
+            </tr>
+          `;
+        });
+        
+        htmlContent += `
+            </tbody>
+          </table>
+        `;
+      }
+      
+      // Add expense category summary table
       htmlContent += `
-        <h2>Category Summary by Group</h2>
+        <h2>Expense Categories by Group</h2>
       `;
       
       if (summary.grouped_categories) {
@@ -535,7 +591,7 @@ export default function Report({ data, onDownloadPDF }) {
       `;
       
       transactions.forEach(transaction => {
-        const statusText = transaction.status === 'saved' ? 'Saved' : 'New';
+        const statusText = transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New';
         htmlContent += `
           <tr>
             <td>${transaction.date || 'N/A'}</td>
@@ -684,8 +740,8 @@ export default function Report({ data, onDownloadPDF }) {
 
       <div ref={reportRef} className="bg-white">
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-6 text-white">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div className="bg-gradient-to-r from-red-500 to-red-600 rounded-lg p-6 text-white">
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -693,8 +749,9 @@ export default function Report({ data, onDownloadPDF }) {
                 </svg>
               </div>
               <div className="ml-4">
-                <p className="text-blue-100">Total Expenses</p>
+                <p className="text-red-100">Total Expenses</p>
                 <p className="text-2xl font-bold">{formatCurrency(summary.total_expenses)}</p>
+                <p className="text-red-200 text-sm">{summary.expense_transactions} transactions</p>
               </div>
             </div>
           </div>
@@ -703,12 +760,28 @@ export default function Report({ data, onDownloadPDF }) {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
               </div>
               <div className="ml-4">
-                <p className="text-green-100">Total Transactions</p>
-                <p className="text-2xl font-bold">{summary.total_transactions}</p>
+                <p className="text-green-100">Total Income</p>
+                <p className="text-2xl font-bold">{formatCurrency(summary.total_income || 0)}</p>
+                <p className="text-green-200 text-sm">{summary.income_transactions || 0} transactions</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-6 text-white">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div className="ml-4">
+                <p className="text-blue-100">Net Amount</p>
+                <p className="text-2xl font-bold">{formatCurrency((summary.total_income || 0) + summary.total_expenses)}</p>
+                <p className="text-blue-200 text-sm">Income - Expenses</p>
               </div>
             </div>
           </div>
@@ -717,12 +790,13 @@ export default function Report({ data, onDownloadPDF }) {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
               </div>
               <div className="ml-4">
-                <p className="text-purple-100">Categories</p>
-                <p className="text-2xl font-bold">{summary.categories.length}</p>
+                <p className="text-purple-100">Total Transactions</p>
+                <p className="text-2xl font-bold">{summary.total_transactions}</p>
+                <p className="text-purple-200 text-sm">All transactions</p>
               </div>
             </div>
           </div>
@@ -808,18 +882,22 @@ export default function Report({ data, onDownloadPDF }) {
                       ) : (
                         <div className="flex items-center space-x-2">
                           <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            transaction.status === 'saved' 
+                            transaction.status === 'income' 
+                              ? 'bg-blue-100 text-blue-800'
+                              : transaction.status === 'saved' 
                               ? 'bg-green-100 text-green-800' 
                               : 'bg-red-100 text-red-800'
                           }`}>
-                            {transaction.status === 'saved' ? 'Saved' : 'New'}
+                            {transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New'}
                           </span>
                           <select
                             value={transaction.category}
                             onChange={(e) => handleCategoryChange(transaction.transaction_key, e.target.value)}
-                            disabled={updatingTransaction === transaction.transaction_key}
+                            disabled={updatingTransaction === transaction.transaction_key || transaction.status === 'income'}
                             className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[120px] ${
-                              updatingTransaction === transaction.transaction_key 
+                              transaction.status === 'income'
+                                ? 'bg-gray-50 cursor-not-allowed opacity-50'
+                                : updatingTransaction === transaction.transaction_key 
                                 ? 'bg-gray-100 cursor-wait opacity-75' 
                                 : 'bg-blue-50 hover:bg-blue-100 focus:bg-white'
                             }`}
@@ -849,9 +927,54 @@ export default function Report({ data, onDownloadPDF }) {
 
         </div>
 
+        {/* Income Summary */}
+        {summary.income_categories && summary.income_categories.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">Income Summary</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-green-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                      Income Type
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                      Amount
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                      Transactions
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                      Percentage
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {summary.income_categories.map((income, index) => (
+                    <tr key={income.category} className={index % 2 === 0 ? 'bg-white' : 'bg-green-50'}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {income.category}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600 font-semibold">
+                        {formatCurrency(income.total_amount)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {income.transaction_count}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {income.percentage}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Category Summary - moved below transactions */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">Category Summary by Group</h3>
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Expense Categories by Group</h3>
           <div className="space-y-6">
             {summary.grouped_categories && summary.grouped_categories.map((group, groupIndex) => (
               <div key={groupIndex} className="border border-gray-200 rounded-lg p-4">

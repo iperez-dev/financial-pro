@@ -191,27 +191,43 @@ def extract_merchant_name(description: str) -> str:
     print(f"Step 3 - Remove long numbers: '{desc}'")
     
     # Remove common state suffixes
-    desc = re.sub(r'\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC)\s*$', '', desc)
+    desc = re.sub(r'\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC|WA)\s*$', '', desc)
     print(f"Step 4 - Remove states: '{desc}'")
     
-    # Remove store numbers and location codes
-    desc = re.sub(r'\s*#\d+\s*', ' ', desc)
-    desc = re.sub(r'\s*\d{3,6}\s*$', '', desc)
+    # Remove store numbers and location codes (improved patterns)
+    desc = re.sub(r'\s*#\d+\s*', ' ', desc)  # Remove #03, #05 patterns
+    desc = re.sub(r'\s+\d{3,6}\s*', ' ', desc)  # Remove 03655, 05924 patterns (not just at end)
     print(f"Step 5 - Remove store numbers: '{desc}'")
+    
+    # Remove Amazon transaction IDs and similar patterns
+    desc = re.sub(r'\*[A-Z0-9]{6,}', '', desc)  # Remove *LH1XA4I, *0Q6L99D, *AB9Q32ZG3
+    desc = re.sub(r'MKTPL\*[A-Z0-9]+', 'MKTPL', desc)  # Simplify AMAZON MKTPL*XXX to AMAZON MKTPL
+    print(f"Step 6 - Remove transaction IDs: '{desc}'")
+    
+    # Remove common suffixes that aren't merchant names
+    desc = re.sub(r'\s+AMZN\.COM/BILL.*$', '', desc)  # Remove Amzn.com/bill WA
+    desc = re.sub(r'\s+MIAMI.*$', '', desc)  # Remove MIAMI and everything after
+    print(f"Step 7 - Remove common suffixes: '{desc}'")
     
     # Clean up extra spaces
     desc = re.sub(r'\s+', ' ', desc).strip()
-    print(f"Step 6 - Clean spaces: '{desc}'")
+    print(f"Step 8 - Clean spaces: '{desc}'")
     
-    # Get the main merchant name (first 2 words for consistency)
-    words = desc.split()
-    if len(words) >= 2:
-        # Take first 2 words as merchant name for consistency
-        merchant = ' '.join(words[:2])
-    elif len(words) == 1:
-        merchant = words[0]
+    # Special handling for known merchant patterns
+    if 'CVS' in desc and 'PHARMACY' in desc:
+        merchant = 'CVS/PHARMACY'
+    elif 'AMAZON' in desc:
+        # Normalize all Amazon transactions to just "AMAZON" for consistency
+        merchant = 'AMAZON'
     else:
-        merchant = desc
+        # Get the main merchant name (first 2 words for consistency)
+        words = desc.split()
+        if len(words) >= 2:
+            merchant = ' '.join(words[:2])
+        elif len(words) == 1:
+            merchant = words[0]
+        else:
+            merchant = desc
     
     print(f"Final backend merchant name: '{merchant}'")
     return merchant.strip()
@@ -582,13 +598,34 @@ async def process_expenses(file: UploadFile = File(...)):
         df = df.dropna(subset=['amount'])
         print(f"DataFrame shape after numeric conversion: {df.shape}")
         
-        # Add category column with amount and date information
+        # Add category column with amount and date information - ONLY for negative amounts (expenses)
         def categorize_with_context(row):
+            # Only categorize negative amounts (expenses), positive amounts are income
+            if row['amount'] >= 0:
+                # Categorize different types of income
+                description_lower = row['description'].lower()
+                if 'payroll' in description_lower or 'salary' in description_lower or 'wages' in description_lower:
+                    return 'Payroll'
+                elif 'refund' in description_lower or 'return' in description_lower:
+                    return 'Refund'
+                elif 'deposit' in description_lower and 'payroll' not in description_lower:
+                    return 'Deposit'
+                elif 'interest' in description_lower:
+                    return 'Interest'
+                elif 'dividend' in description_lower:
+                    return 'Dividend'
+                else:
+                    return 'Income'  # Generic income category
+            
             date_val = row.get('date', None) if 'date' in df.columns else None
             category, status = categorize_expense(row['description'], row['amount'], date_val)
             return category
         
         def get_status_with_context(row):
+            # Only categorize negative amounts (expenses), positive amounts are income
+            if row['amount'] >= 0:
+                return 'income'  # Mark positive amounts as income
+            
             date_val = row.get('date', None) if 'date' in df.columns else None
             category, status = categorize_expense(row['description'], row['amount'], date_val)
             return status
@@ -596,10 +633,21 @@ async def process_expenses(file: UploadFile = File(...)):
         df['category'] = df.apply(categorize_with_context, axis=1)
         df['status'] = df.apply(get_status_with_context, axis=1)
         
-        # Calculate summary statistics using only expenses (negative amounts)
-        expenses_df = df[df['amount'] < 0].copy()
+        # Calculate summary statistics - separate income from expenses
+        expenses_df = df[df['amount'] < 0].copy()  # Only negative amounts (expenses)
+        income_df = df[df['amount'] >= 0].copy()   # Only positive amounts (income)
+        
         total_expenses = float(expenses_df['amount'].sum())  # negative total expenses
+        total_income = float(income_df['amount'].sum()) if len(income_df) > 0 else 0.0  # positive total income
         total_transactions = len(df)
+        expense_transactions = len(expenses_df)
+        income_transactions = len(income_df)
+        
+        print(f"Total transactions: {total_transactions}")
+        print(f"Expense transactions: {expense_transactions}")
+        print(f"Income transactions: {income_transactions}")
+        print(f"Total expenses: ${total_expenses:.2f}")
+        print(f"Total income: ${total_income:.2f}")
         
         # Category breakdown based on expenses only
         category_summary = expenses_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
@@ -614,6 +662,21 @@ async def process_expenses(file: UploadFile = File(...)):
         
         # Convert to list of dictionaries for JSON response
         category_data = category_summary.to_dict('records')
+        
+        # Income breakdown by income type
+        income_summary = None
+        income_data = []
+        if len(income_df) > 0:
+            income_summary = income_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+            income_summary.columns = ['category', 'total_amount', 'transaction_count']
+            
+            # Calculate percentages for income types
+            income_summary['percentage'] = (
+                income_summary['total_amount'] / total_income * 100
+            ).round(2)
+            
+            # Convert to list of dictionaries for JSON response
+            income_data = income_summary.to_dict('records')
         
         # Create grouped category summary
         def create_grouped_summary(category_data):
@@ -712,13 +775,17 @@ async def process_expenses(file: UploadFile = File(...)):
             "success": True,
             "summary": {
                 "total_expenses": total_expenses,
+                "total_income": total_income,
                 "total_transactions": total_transactions,
+                "expense_transactions": expense_transactions,
+                "income_transactions": income_transactions,
                 "categories": category_data,
-                "grouped_categories": grouped_category_data
+                "grouped_categories": grouped_category_data,
+                "income_categories": income_data
             },
             "transactions": transactions,
             "monthly_data": monthly_data,
-            "message": f"Successfully processed {total_transactions} transactions"
+            "message": f"Successfully processed {total_transactions} transactions ({expense_transactions} expenses, {income_transactions} income)"
         }
         
     except Exception as e:
