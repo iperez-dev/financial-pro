@@ -47,7 +47,48 @@ export default function Report({ data, onDownloadPDF }) {
   const [showNewCategoryForm, setShowNewCategoryForm] = useState(null);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryKeywords, setNewCategoryKeywords] = useState('');
+  const [updateStatus, setUpdateStatus] = useState({}); // { [transactionKey]: 'success' | 'error' | null }
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState(null); // Track which dropdown is open
+  const [deleteModal, setDeleteModal] = useState(null); // { categoryId, categoryName } or null
+
+  // Helper function to show update status icons
+  const showUpdateStatus = (transactionKey, status) => {
+    setUpdateStatus(prev => ({ ...prev, [transactionKey]: status }));
+  };
+
+  // Show delete confirmation modal
+  const showDeleteModal = (categoryId, categoryName) => {
+    setDeleteModal({ categoryId, categoryName });
+  };
+
+  // Confirm and delete category
+  const confirmDeleteCategory = async () => {
+    if (!deleteModal) return;
+
+    try {
+      const response = await fetch(`http://localhost:8000/categories/${deleteModal.categoryId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Reload categories to reflect the deletion
+        await loadCategories();
+        console.log(`Category "${deleteModal.categoryName}" deleted successfully`);
+      } else {
+        console.error('Failed to delete category:', response.status);
+      }
+    } catch (err) {
+      console.error('Error deleting category:', err);
+    } finally {
+      setDeleteModal(null);
+    }
+  };
+
+  // Cancel delete
+  const cancelDelete = () => {
+    setDeleteModal(null);
+  };
 
   if (!data || !data.summary) {
     return null;
@@ -100,6 +141,30 @@ export default function Report({ data, onDownloadPDF }) {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (openDropdown && !event.target.closest('.relative')) {
+        setOpenDropdown(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openDropdown]);
+
+  // Handle escape key to close modal
+  useEffect(() => {
+    const handleEscapeKey = (event) => {
+      if (event.key === 'Escape' && deleteModal) {
+        setDeleteModal(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscapeKey);
+    return () => document.removeEventListener('keydown', handleEscapeKey);
+  }, [deleteModal]);
 
   const loadCategories = async () => {
     try {
@@ -158,15 +223,15 @@ export default function Report({ data, onDownloadPDF }) {
           );
         }
         
-        alert('Category updated successfully! Similar transactions have been automatically categorized.');
+        showUpdateStatus(transactionKey, 'success');
       } else {
         const errorData = await response.text();
         console.error('Failed to update transaction category:', response.status, errorData);
-        alert(`Failed to update category: ${response.status} - ${errorData}`);
+        showUpdateStatus(transactionKey, 'error');
       }
     } catch (err) {
       console.error('Error updating transaction category:', err);
-      alert(`Error updating category: ${err.message}`);
+      showUpdateStatus(transactionKey, 'error');
     } finally {
       setUpdatingTransaction(null);
     }
@@ -406,11 +471,11 @@ export default function Report({ data, onDownloadPDF }) {
         setShowNewCategoryForm(null);
       } else {
         const errorData = await response.json();
-        alert(`Failed to create category: ${errorData.detail || 'Unknown error'}`);
+        showUpdateStatus(transactionKey, 'error');
       }
     } catch (err) {
       console.error('Error creating category:', err);
-      alert(`Error creating category: ${err.message}`);
+      showUpdateStatus(transactionKey, 'error');
     }
   };
 
@@ -759,7 +824,7 @@ export default function Report({ data, onDownloadPDF }) {
         }
       } catch (fallbackError) {
         console.error('Fallback PDF generation also failed:', fallbackError);
-        alert(`Error generating PDF: ${error.message || 'Unknown error'}. Please try refreshing the page and uploading your file again.`);
+        console.error(`Error generating PDF: ${error.message || 'Unknown error'}. Please try refreshing the page and uploading your file again.`);
       }
     }
   };
@@ -909,7 +974,7 @@ export default function Report({ data, onDownloadPDF }) {
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
                       {showNewCategoryForm === transaction.transaction_key ? (
-                        <div className="space-y-2 min-w-[200px]">
+                        <div className="space-y-2 min-w-[180px]">
                           <input
                             type="text"
                             placeholder="Category name"
@@ -946,31 +1011,83 @@ export default function Report({ data, onDownloadPDF }) {
                         </div>
                       ) : (
                         <div className="flex items-center space-x-2">
-                          <select
-                            value={transaction.category}
-                            onChange={(e) => handleCategoryChange(transaction.transaction_key, e.target.value)}
-                            disabled={updatingTransaction === transaction.transaction_key || transaction.status === 'income'}
-                            className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[120px] ${
-                              transaction.status === 'income'
-                                ? 'bg-gray-50 cursor-not-allowed opacity-50'
-                                : updatingTransaction === transaction.transaction_key 
-                                ? 'bg-gray-100 cursor-wait opacity-75' 
-                                : 'bg-blue-50 hover:bg-blue-100 focus:bg-white'
-                            }`}
-                          >
-                            {categories
-                              .sort((a, b) => a.name.localeCompare(b.name))
-                              .map((cat) => (
-                                <option key={cat.id} value={cat.name}>
-                                  {cat.name}
-                                </option>
-                              ))}
-                            <option value="__NEW_CATEGORY__" className="text-green-600 font-medium">
-                              + Add New Category
-                            </option>
-                          </select>
+                          <div className="relative">
+                            <button
+                              onClick={() => setOpenDropdown(openDropdown === transaction.transaction_key ? null : transaction.transaction_key)}
+                              disabled={updatingTransaction === transaction.transaction_key || transaction.status === 'income'}
+                              className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[180px] text-left flex items-center justify-between ${
+                                transaction.status === 'income'
+                                  ? 'bg-gray-50 cursor-not-allowed opacity-50'
+                                  : updatingTransaction === transaction.transaction_key 
+                                  ? 'bg-gray-100 cursor-wait opacity-75' 
+                                  : 'bg-white hover:bg-gray-100 focus:bg-white'
+                              }`}
+                            >
+                              <span>{transaction.category}</span>
+                              <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                            
+                            {openDropdown === transaction.transaction_key && (
+                              <div className="absolute z-10 mt-1 w-full min-w-[180px] bg-white border border-gray-300 rounded shadow-lg max-h-48 overflow-y-auto">
+                                {categories
+                                  .sort((a, b) => a.name.localeCompare(b.name))
+                                  .map((cat) => (
+                                    <div
+                                      key={cat.id}
+                                      className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                    >
+                                      <span
+                                        onClick={() => {
+                                          handleCategoryChange(transaction.transaction_key, cat.name);
+                                          setOpenDropdown(null);
+                                        }}
+                                        className="flex-1"
+                                      >
+                                        {cat.name}
+                                      </span>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          showDeleteModal(cat.id, cat.name);
+                                        }}
+                                        className="ml-2 text-gray-500 hover:text-gray-700 p-1"
+                                        title={`Delete ${cat.name}`}
+                                      >
+                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  ))}
+                                <div
+                                  onClick={() => {
+                                    handleCategoryChange(transaction.transaction_key, '__NEW_CATEGORY__');
+                                    setOpenDropdown(null);
+                                  }}
+                                  className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs text-green-600 font-medium border-t border-gray-200"
+                                >
+                                  + Add New Category
+                                </div>
+                              </div>
+                            )}
+                          </div>
                           {updatingTransaction === transaction.transaction_key && (
                             <span className="ml-2 text-xs text-gray-500">Saving...</span>
+                          )}
+                          {updateStatus[transaction.transaction_key] && (
+                            <span className="ml-2">
+                              {updateStatus[transaction.transaction_key] === 'success' ? (
+                                <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              )}
+                            </span>
                           )}
                         </div>
                       )}
@@ -1091,6 +1208,43 @@ export default function Report({ data, onDownloadPDF }) {
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteModal && (
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
+          <div className="bg-white rounded-lg p-6 max-w-sm mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-lg font-medium text-gray-900">Delete Category</h3>
+              </div>
+            </div>
+            <div className="mb-6">
+              <p className="text-sm text-gray-500">
+                Are you sure you want to delete the category <span className="font-semibold text-gray-900">"{deleteModal.categoryName}"</span>? This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={cancelDelete}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteCategory}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Scroll to Top Button */}
       {showScrollTop && (
