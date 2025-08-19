@@ -123,6 +123,15 @@ export default function Report({ data, onDownloadPDF }) {
       });
       
       setTransactions(transactionsWithKeys);
+      
+      // Initialize status for transactions that already have saved categories
+      const initialStatus = {};
+      transactionsWithKeys.forEach(transaction => {
+        if (transaction.status === 'saved') {
+          initialStatus[transaction.transaction_key] = 'success';
+        }
+      });
+      setUpdateStatus(initialStatus);
     }
   }, [data]);
 
@@ -1079,9 +1088,11 @@ export default function Report({ data, onDownloadPDF }) {
                           {updateStatus[transaction.transaction_key] && (
                             <span className="ml-2">
                               {updateStatus[transaction.transaction_key] === 'success' ? (
-                                <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
+                                <div className="w-4 h-4 bg-green-600 rounded-full flex items-center justify-center">
+                                  <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </div>
                               ) : (
                                 <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
