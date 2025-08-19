@@ -2,10 +2,7 @@
  * Account Type Selection Component
  * First step in the authentication flow - choose Individual or Business
  */
-import { useState } from 'react'
-
 export default function AccountTypeSelection({ onAccountTypeSelect }) {
-  const [selectedType, setSelectedType] = useState(null)
 
   const accountTypes = [
     {
@@ -43,11 +40,7 @@ export default function AccountTypeSelection({ onAccountTypeSelect }) {
     }
   ]
 
-  const handleContinue = () => {
-    if (selectedType) {
-      onAccountTypeSelect(selectedType)
-    }
-  }
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -71,12 +64,8 @@ export default function AccountTypeSelection({ onAccountTypeSelect }) {
           {accountTypes.map((type) => (
             <div
               key={type.id}
-              className={`relative rounded-2xl border-2 p-8 cursor-pointer transition-all duration-200 ${
-                selectedType === type.id
-                  ? `border-${type.color}-500 bg-${type.color}-50 shadow-lg transform scale-105`
-                  : 'border-gray-200 hover:border-gray-300 hover:shadow-md'
-              }`}
-              onClick={() => setSelectedType(type.id)}
+              className="relative rounded-2xl border-2 p-8 cursor-pointer transition-all duration-200 border-gray-200 hover:border-gray-300 hover:shadow-md hover:scale-105"
+              onClick={() => onAccountTypeSelect(type.id)}
             >
               {/* Badge */}
               {type.badge && (
@@ -87,16 +76,7 @@ export default function AccountTypeSelection({ onAccountTypeSelect }) {
                 </div>
               )}
               
-              {/* Selection Indicator */}
-              {selectedType === type.id && (
-                <div className="absolute top-6 right-6">
-                  <div className={`h-8 w-8 bg-${type.color}-500 rounded-full flex items-center justify-center shadow-lg`}>
-                    <svg className="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                </div>
-              )}
+
 
               {/* Icon and Title */}
               <div className="flex items-start mb-6">
@@ -124,46 +104,14 @@ export default function AccountTypeSelection({ onAccountTypeSelect }) {
               </div>
 
               {/* Hover Effect Overlay */}
-              <div className={`absolute inset-0 rounded-2xl transition-opacity duration-200 ${
-                selectedType === type.id ? 'opacity-0' : 'opacity-0 hover:opacity-5'
-              } bg-${type.color}-500 pointer-events-none`} />
+              <div className={`absolute inset-0 rounded-2xl transition-opacity duration-200 opacity-0 hover:opacity-5 bg-${type.color}-500 pointer-events-none`} />
             </div>
           ))}
         </div>
 
-        {/* Continue Button */}
-        <div className="flex justify-center pt-8">
-          <button
-            type="button"
-            onClick={handleContinue}
-            disabled={!selectedType}
-            className={`px-8 py-4 rounded-lg text-lg font-semibold transition-all duration-200 ${
-              selectedType
-                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-xl transform hover:scale-105'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-            }`}
-          >
-            {selectedType ? `Continue with ${selectedType === 'individual' ? 'Individual' : 'Business'} Account` : 'Select an Account Type'}
-          </button>
-        </div>
 
-        {/* Development Mode */}
-        <div className="mt-12 pt-8 border-t border-gray-200">
-          <div className="text-center">
-            <p className="text-sm text-gray-500 mb-4">Development & Testing</p>
-            <button
-              type="button"
-              onClick={() => {
-                window.localStorage.setItem('dev-mode', 'true')
-                window.location.reload()
-              }}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              <span className="mr-2">🛠️</span>
-              Skip Authentication (Development Mode)
-            </button>
-          </div>
-        </div>
+
+
       </div>
     </div>
   )
