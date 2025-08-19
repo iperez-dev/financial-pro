@@ -4,6 +4,7 @@
  */
 import { useState, useEffect } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
+import Sidebar from './Sidebar'
 
 export default function BusinessDashboard() {
   const { user, userProfile, logout, getAuthToken } = useAuth()
@@ -12,6 +13,7 @@ export default function BusinessDashboard() {
   const [loading, setLoading] = useState(true)
   const [showAddClient, setShowAddClient] = useState(false)
   const [newClient, setNewClient] = useState({ name: '', email: '', phone: '' })
+  const [currentPage, setCurrentPage] = useState('dashboard')
 
   useEffect(() => {
     fetchBusinessData()
@@ -68,6 +70,11 @@ export default function BusinessDashboard() {
     } catch (error) {
       console.error('Error adding client:', error)
     }
+  }
+
+  const handleNavigation = (pageId) => {
+    setCurrentPage(pageId)
+    console.log(`Business navigating to: ${pageId}`)
   }
 
   if (loading) {

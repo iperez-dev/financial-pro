@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export default function FileUpload({ onFileUpload, isLoading }) {
+export default function FileUpload({ onFileUpload, isLoading, hasExistingReports = false }) {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
 
@@ -64,10 +64,14 @@ export default function FileUpload({ onFileUpload, isLoading }) {
   return (
     <div className="w-full max-w-2xl mx-auto">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Upload Your Expense Files</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+          {hasExistingReports ? 'Add More Expense Files' : 'Upload Your Expense Files'}
+        </h2>
         <p className="text-gray-600">
-          Upload one or multiple Excel files (.xlsx, .xls) or CSV files (.csv) containing your expense data. 
-          Make sure your files have columns for description and amount.
+          {hasExistingReports 
+            ? 'Upload additional Excel files (.xlsx, .xls) or CSV files (.csv) to add to your existing reports. New files will be added to your current analysis.'
+            : 'Upload one or multiple Excel files (.xlsx, .xls) or CSV files (.csv) containing your expense data. Make sure your files have columns for description and amount.'
+          }
         </p>
       </div>
 

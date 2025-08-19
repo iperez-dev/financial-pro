@@ -36,7 +36,7 @@ const formatCurrency = (amount) => {
   }).format(amount);
 };
 
-export default function MultiReport({ data }) {
+export default function MultiReport({ data, onRemoveReport }) {
   const { reports, summary, total_files, successful_files } = data;
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -141,8 +141,20 @@ export default function MultiReport({ data }) {
             <h4 className="text-lg font-semibold mb-3">Breakdown by Report</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {successfulReports.map((report, index) => (
-                <div key={index} className="bg-white/5 rounded-lg p-4 border border-white/10">
-                  <h5 className="font-medium mb-2 truncate" title={formatFilename(report.filename)}>
+                <div key={index} className="bg-white/5 rounded-lg p-4 border border-white/10 relative group">
+                  {onRemoveReport && (
+                    <button
+                      onClick={() => onRemoveReport(report.filename)}
+                      className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove this report"
+                      aria-label={`Remove report ${formatFilename(report.filename)}`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                  <h5 className="font-medium mb-2 truncate pr-8" title={formatFilename(report.filename)}>
                     {formatFilename(report.filename)}
                   </h5>
                   <div className="space-y-1 text-sm">

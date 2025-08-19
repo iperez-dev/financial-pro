@@ -9,16 +9,50 @@ import BusinessDashboard from './components/BusinessDashboard';
 import AccountTypeSelection from './components/AccountTypeSelection';
 import IndividualAuthForm from './components/IndividualAuthForm';
 import BusinessAuthForm from './components/BusinessAuthForm';
+import Sidebar from './components/Sidebar';
 
 
 function FinancialProApp() {
   const { user, userProfile, loading, logout, getAuthToken, isBusinessOwner, isIndividual } = useAuth();
   const [reportData, setReportData] = useState(null);
   const [multiReportData, setMultiReportData] = useState(null);
+  const [allReports, setAllReports] = useState([]); // Store all accumulated reports
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [authFlow, setAuthFlow] = useState('account-selection'); // 'account-selection', 'individual-auth', 'business-auth'
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [currentPage, setCurrentPage] = useState('reports'); // Default to reports page
+
+  // Load saved reports from localStorage on component mount
+  useEffect(() => {
+    if (user) {
+      const savedReports = localStorage.getItem(`financial-pro-reports-${user.id}`);
+      if (savedReports) {
+        try {
+          const parsedReports = JSON.parse(savedReports);
+          setAllReports(parsedReports);
+          
+          // If there are saved reports, create multiReportData to display them
+          if (parsedReports.length > 0) {
+            const combinedData = createCombinedReportData(parsedReports);
+            setMultiReportData(combinedData);
+            // Clear single report data since we have multiple
+            setReportData(null);
+          }
+        } catch (error) {
+          console.error('Error loading saved reports:', error);
+          localStorage.removeItem(`financial-pro-reports-${user.id}`);
+        }
+      }
+    }
+  }, [user]);
+
+  // Save reports to localStorage whenever allReports changes
+  useEffect(() => {
+    if (user && allReports.length > 0) {
+      localStorage.setItem(`financial-pro-reports-${user.id}`, JSON.stringify(allReports));
+    }
+  }, [allReports, user]);
 
   // Handle scroll to top button visibility
   useEffect(() => {
@@ -37,6 +71,48 @@ function FinancialProApp() {
       top: 0,
       behavior: 'smooth'
     });
+  };
+
+  // Create combined report data from multiple reports
+  const createCombinedReportData = (reports) => {
+    const successfulReports = reports.filter(report => report.success);
+    
+    if (successfulReports.length === 0) {
+      return null;
+    }
+
+    // Calculate combined summary
+    let totalExpenses = 0;
+    let totalIncome = 0;
+    let totalTransactions = 0;
+    let expenseTransactions = 0;
+    let incomeTransactions = 0;
+
+    successfulReports.forEach(report => {
+      totalExpenses += report.summary.total_expenses;
+      totalIncome += report.summary.total_income;
+      totalTransactions += report.summary.total_transactions;
+      expenseTransactions += report.summary.expense_transactions;
+      incomeTransactions += report.summary.income_transactions;
+    });
+
+    const netAmount = totalIncome - Math.abs(totalExpenses);
+
+    return {
+      success: true,
+      reports: reports,
+      summary: {
+        total_expenses: totalExpenses,
+        total_income: totalIncome,
+        net_amount: netAmount,
+        total_transactions: totalTransactions,
+        expense_transactions: expenseTransactions,
+        income_transactions: incomeTransactions
+      },
+      total_files: reports.length,
+      successful_files: successfulReports.length,
+      message: `Successfully processed ${successfulReports.length} out of ${reports.length} files`
+    };
   };
 
   // Show loading spinner while checking authentication
@@ -91,8 +167,6 @@ function FinancialProApp() {
   const handleFileUpload = async (files) => {
     setIsLoading(true);
     setError(null);
-    setReportData(null);
-    setMultiReportData(null);
 
     try {
       const formData = new FormData();
@@ -133,12 +207,27 @@ function FinancialProApp() {
 
       const data = await response.json();
       
-      // Set appropriate state based on response type
+      // Add new reports to existing ones instead of replacing
+      let newReports = [];
       if (fileArray.length === 1) {
-        setReportData(data);
+        // Single file response - convert to array format
+        newReports = [data];
       } else {
-        setMultiReportData(data);
+        // Multiple files response - extract reports array
+        newReports = data.reports || [];
       }
+
+      // Combine with existing reports
+      const updatedAllReports = [...allReports, ...newReports];
+      setAllReports(updatedAllReports);
+
+      // Create combined view
+      const combinedData = createCombinedReportData(updatedAllReports);
+      if (combinedData) {
+        setMultiReportData(combinedData);
+        setReportData(null); // Clear single report view
+      }
+
     } catch (err) {
       setError(err.message);
       console.error('Error uploading files:', err);
@@ -150,93 +239,184 @@ function FinancialProApp() {
   const handleReset = () => {
     setReportData(null);
     setMultiReportData(null);
+    setAllReports([]);
     setError(null);
+    
+    // Clear from localStorage
+    if (user) {
+      localStorage.removeItem(`financial-pro-reports-${user.id}`);
+    }
+  };
+
+  const handleRemoveReport = (filename) => {
+    // Remove the specific report from allReports
+    const updatedReports = allReports.filter(report => report.filename !== filename);
+    setAllReports(updatedReports);
+
+    // Update the display based on remaining reports
+    if (updatedReports.length === 0) {
+      // No reports left
+      setMultiReportData(null);
+      setReportData(null);
+    } else if (updatedReports.length === 1) {
+      // Only one report left, show single report view
+      setReportData(updatedReports[0]);
+      setMultiReportData(null);
+    } else {
+      // Multiple reports remain, update multi-report view
+      const combinedData = createCombinedReportData(updatedReports);
+      setMultiReportData(combinedData);
+      setReportData(null);
+    }
+  };
+
+  const handleNavigation = (pageId) => {
+    setCurrentPage(pageId);
+    // Add any additional navigation logic here
+    console.log(`Navigating to: ${pageId}`);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <h1 className="text-3xl font-bold text-gray-900">Financial Pro</h1>
-              </div>
-              <div className="ml-4">
-                <p className="text-gray-600">Expense Analysis & Reporting</p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-4">
-              {/* Development Mode Indicator */}
-              {typeof window !== 'undefined' && window.localStorage?.getItem('dev-mode') === 'true' && (
-                <span className="bg-yellow-100 text-yellow-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                  🛠️ DEV MODE
-                </span>
-              )}
-              <span className="text-sm text-gray-600">Welcome, {user.email}</span>
-              {(reportData || multiReportData) && (
-                <button
-                  onClick={handleReset}
-                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                >
-                  Upload New File
-                </button>
-              )}
-              <button
-                onClick={logout}
-                className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-sm font-medium"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <Sidebar
+        userType="individual"
+        currentPage={currentPage}
+        onNavigate={handleNavigation}
+        user={user}
+        onLogout={logout}
+      />
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <header className="bg-white shadow-sm border-b">
+          <div className="px-6 py-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {currentPage === 'reports' && 'Expense Reports'}
+                  {currentPage === 'dashboard' && 'Dashboard'}
+                  {currentPage === 'categories' && 'Categories'}
+                  {currentPage === 'settings' && 'Settings'}
+                </h1>
+                <p className="text-gray-600 mt-1">
+                  {currentPage === 'reports' && 'Upload and analyze your expense data'}
+                  {currentPage === 'dashboard' && 'Overview of your financial data'}
+                  {currentPage === 'categories' && 'Manage expense categories'}
+                  {currentPage === 'settings' && 'Account and application settings'}
+                </p>
               </div>
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">Error Processing File</h3>
-                <p className="mt-1 text-sm text-red-700">{error}</p>
+              <div className="flex items-center space-x-4">
+                {(reportData || multiReportData) && currentPage === 'reports' && (
+                  <button
+                    onClick={handleReset}
+                    className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                  >
+                    Clear All Reports
+                  </button>
+                )}
               </div>
             </div>
           </div>
-        )}
+        </header>
 
-        {!reportData && !multiReportData ? (
-          <FileUpload onFileUpload={handleFileUpload} isLoading={isLoading} />
-        ) : multiReportData ? (
-          <MultiReport data={multiReportData} />
-        ) : (
-          <Report data={reportData} />
-        )}
+        {/* Main Content */}
+        <main className="flex-1 overflow-auto">
+          <div className="max-w-7xl mx-auto px-6 py-8">
+            {/* Error Display */}
+            {error && (
+              <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-medium text-red-800">Error Processing File</h3>
+                    <p className="mt-1 text-sm text-red-700">{error}</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-        {(reportData || multiReportData) && (
-          <div className="mt-8 text-center">
-            <p className="text-gray-600">
-              {multiReportData ? multiReportData.message : reportData.message}
-            </p>
+            {/* Page Content Based on Current Page */}
+            {currentPage === 'reports' && (
+              <>
+                {/* File Upload Area */}
+                <FileUpload 
+                  onFileUpload={handleFileUpload} 
+                  isLoading={isLoading} 
+                  hasExistingReports={allReports.length > 0}
+                />
+
+                {/* Show reports if they exist */}
+                {multiReportData ? (
+                  <div className="mt-12">
+                    <MultiReport data={multiReportData} onRemoveReport={handleRemoveReport} />
+                  </div>
+                ) : reportData ? (
+                  <div className="mt-12">
+                    <Report data={reportData} />
+                  </div>
+                ) : null}
+
+                {(reportData || multiReportData) && (
+                  <div className="mt-8 text-center">
+                    <p className="text-gray-600">
+                      {multiReportData ? multiReportData.message : reportData.message}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
+            {currentPage === 'dashboard' && (
+              <div className="text-center py-12">
+                <div className="max-w-md mx-auto">
+                  <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Dashboard Coming Soon</h3>
+                  <p className="text-gray-600">This page will show an overview of your financial data and key metrics.</p>
+                </div>
+              </div>
+            )}
+
+            {currentPage === 'categories' && (
+              <div className="text-center py-12">
+                <div className="max-w-md mx-auto">
+                  <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Category Management Coming Soon</h3>
+                  <p className="text-gray-600">This page will allow you to create and manage custom expense categories.</p>
+                </div>
+              </div>
+            )}
+
+            {currentPage === 'settings' && (
+              <div className="text-center py-12">
+                <div className="max-w-md mx-auto">
+                  <div className="w-16 h-16 mx-auto bg-purple-100 rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Settings Coming Soon</h3>
+                  <p className="text-gray-600">This page will contain account settings and application preferences.</p>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t mt-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="text-center text-gray-500">
-            <p>&copy; 2024 Financial Pro. Built with Next.js and FastAPI.</p>
-          </div>
-        </div>
-      </footer>
+        </main>
+      </div>
 
       {/* Scroll to Top Button */}
       {showScrollTop && (
