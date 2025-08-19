@@ -91,11 +91,11 @@
     "keywords": ["gas station", "shell", "bp", "exxon", "chevron", "fuel", "gasoline", "gas"]
   },
   {
-    "id": "transportation_toll",
-    "name": "Transportation - Toll",
+    "id": "transportation_tolls",
+    "name": "Transportation - Tolls",
     "parent": "transportation",
     "type": "expense",
-    "keywords": ["toll", "sunpass", "ezpass", "turnpike", "toll road"]
+    "keywords": ["toll", "tolls", "sunpass", "ezpass", "turnpike", "toll road"]
   },
   {
     "id": "shopping_food_groceries",
@@ -131,13 +131,6 @@
     "parent": "child_expenses",
     "type": "expense",
     "keywords": ["college fund", "529 plan", "education savings", "college savings"]
-  },
-  {
-    "id": "healthcare_health_insurance",
-    "name": "Healthcare - Health Insurance",
-    "parent": "healthcare",
-    "type": "expense",
-    "keywords": ["health insurance", "medical insurance", "healthcare premium", "insurance premium"]
   },
   {
     "id": "healthcare_doctor_office",
@@ -240,21 +233,21 @@
   {
     "id": "personal_payroll_ivan",
     "name": "Personal - Payroll Ivan",
-    "parent": "personal_income",
+    "parent": "personal",
     "type": "income",
     "keywords": ["payroll ivan", "ivan salary", "ivan paycheck", "salary ivan"]
   },
   {
     "id": "personal_payroll_jenny",
     "name": "Personal - Payroll Jenny",
-    "parent": "personal_income",
+    "parent": "personal",
     "type": "income",
     "keywords": ["payroll jenny", "jenny salary", "jenny paycheck", "salary jenny"]
   },
   {
     "id": "personal_other_income",
     "name": "Personal - Other Income",
-    "parent": "personal_income",
+    "parent": "personal",
     "type": "income",
     "keywords": ["other income", "miscellaneous income", "bonus", "refund", "tax refund"]
   }

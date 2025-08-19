@@ -98,30 +98,44 @@ export default function Report({ data, onDownloadPDF }) {
     const groupOrder = [
       // EXPENSES
       'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 
-      'Healthcare', 'Personal', 'Financial', 'Debt', 'Other Expenses',
+      'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses',
       // INCOME  
-      'Business', 'Personal'
+      'Business', 'Jobs', 'Other Income'
     ];
 
     const subcategoryOrder = {
       'Housing': ['Mortgage', 'HOA Fee', 'Property Taxes', 'Home Insurance', 'Home Repairs'],
       'Utilities': ['City Gas', 'FPL', 'Water and Sewer', 'Internet', 'Phone'],
-      'Transportation': ['Car Insurance', 'Car Repairs', 'Fuel', 'Toll'],
+      'Transportation': ['Car Insurance', 'Car Repairs', 'Fuel', 'Tolls'],
       'Shopping & Food': ['Groceries', 'Dining Out', 'Amazon'],
       'Child Expenses': ['Childcare', 'College Fund'],
-      'Healthcare': ['Health Insurance', 'Doctor Office', 'Pharmacy'],
-      'Personal': ['Allowance Jenny', 'Allowance Ivan', 'Donations', 'Subscriptions'],
+      'Healthcare': ['Doctor Office', 'Pharmacy'],
+      'Personal Expenses': ['Allowance Jenny', 'Allowance Ivan', 'Donations', 'Subscriptions'],
       'Financial': ['Savings Account', 'Investment (Robinhood)'],
       'Debt': ['Credit Card Jenny', 'Credit Card Ivan', 'Student Loan', 'Car Payments'],
       'Business': ['WBI'],
-      'Personal': ['Payroll Ivan', 'Payroll Jenny', 'Other Income'] // Income Personal
+      'Jobs': ['Payroll Ivan', 'Payroll Jenny']
     };
 
     categories.forEach(category => {
       // Extract parent and subcategory from the name
       const nameParts = category.name.split(' - ');
       if (nameParts.length === 2) {
-        const [parent, subcategory] = nameParts;
+        let [parent, subcategory] = nameParts;
+        
+        // Handle Personal categories - separate by type
+        if (parent === 'Personal') {
+          const isJobCategory = category.name.includes('Payroll');
+          const isOtherIncomeCategory = category.name.includes('Other Income');
+          if (isJobCategory) {
+            parent = 'Jobs';
+          } else if (isOtherIncomeCategory) {
+            parent = 'Other Income';
+          } else {
+            parent = 'Personal Expenses';
+          }
+        }
+        
         if (!groups[parent]) {
           groups[parent] = [];
         }
@@ -1148,8 +1162,8 @@ export default function Report({ data, onDownloadPDF }) {
                                 </div>
                                 {(() => {
                                   const organizedCategories = organizeCategories(categories);
-                                  const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal', 'Financial', 'Debt', 'Other Expenses'];
-                                  const incomeGroups = ['Business', 'Personal'];
+                                  const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses'];
+                                  const incomeGroups = ['Business', 'Jobs', 'Other Income'];
                                   
                                   const renderSection = (sectionName, groupNames) => (
                                     <div key={sectionName}>
@@ -1157,7 +1171,7 @@ export default function Report({ data, onDownloadPDF }) {
                                       {groupNames.map(groupName => {
                                         if (!organizedCategories[groupName]) return null;
                                         const groupCategories = organizedCategories[groupName];
-                                        const isPersonalIncome = groupName === 'Personal' && sectionName === 'INCOME';
+                                        const displayGroupName = groupName; // Use the actual group name now
                                         
                                         return (
                                           <div key={`${sectionName}-${groupName}`}>
@@ -1166,16 +1180,16 @@ export default function Report({ data, onDownloadPDF }) {
                                               /* Standalone category (selectable) */
                                               <div
                                                 key={groupCategories[0].id}
-                                                className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                                className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs font-semibold text-gray-700 bg-gray-50 border-b border-gray-100"
                                               >
                                                 <span
                                                   onClick={() => {
                                                     handleCategoryChange(transaction.transaction_key, groupCategories[0].name);
                                                     setOpenDropdown(null);
                                                   }}
-                                                  className="flex-1 font-medium"
+                                                  className="flex-1"
                                                 >
-                                                  {groupName}
+                                                  {displayGroupName}
                                                 </span>
                                                 <button
                                                   onClick={(e) => {
@@ -1195,46 +1209,37 @@ export default function Report({ data, onDownloadPDF }) {
                                               <>
                                                 {/* Group Header (non-selectable) */}
                                                 <div className="px-2 py-1 text-xs font-semibold text-gray-700 bg-gray-50 border-b border-gray-100">
-                                                  {groupName}
+                                                  {displayGroupName}
                                                 </div>
                                                 {/* Subcategories (indented and selectable) */}
-                                                {groupCategories
-                                                  .filter(cat => {
-                                                    // Filter Personal categories based on section
-                                                    if (groupName === 'Personal') {
-                                                      const isIncomeCategory = cat.name.includes('Payroll') || cat.name.includes('Other Income');
-                                                      return isPersonalIncome ? isIncomeCategory : !isIncomeCategory;
-                                                    }
-                                                    return true;
-                                                  })
-                                                  .map((cat) => (
-                                                    <div
-                                                      key={cat.id}
-                                                      className="flex items-center justify-between pl-6 pr-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                                {groupCategories.map((cat) => (
+                                                  <div
+                                                    key={cat.id}
+                                                    className="flex items-center justify-between pl-6 pr-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                                  >
+                                                    <span
+                                                      onClick={() => {
+                                                        handleCategoryChange(transaction.transaction_key, cat.name);
+                                                        setOpenDropdown(null);
+                                                      }}
+                                                      className="flex-1"
                                                     >
-                                                      <span
-                                                        onClick={() => {
-                                                          handleCategoryChange(transaction.transaction_key, cat.name);
-                                                          setOpenDropdown(null);
-                                                        }}
-                                                        className="flex-1"
-                                                      >
-                                                        {cat.subcategory || cat.name}
-                                                      </span>
-                                                      <button
-                                                        onClick={(e) => {
-                                                          e.stopPropagation();
-                                                          showDeleteModal(cat.id, cat.name);
-                                                        }}
-                                                        className="ml-2 text-gray-500 hover:text-gray-700 p-1"
-                                                        title={`Delete ${cat.name}`}
-                                                      >
-                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                                        </svg>
-                                                      </button>
-                                                    </div>
-                                                  ))}
+                                                      {cat.subcategory || cat.name}
+                                                    </span>
+                                                    <button
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        showDeleteModal(cat.id, cat.name);
+                                                      }}
+                                                      className="ml-2 text-gray-500 hover:text-gray-700 p-1"
+                                                      title={`Delete ${cat.name}`}
+                                                    >
+                                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                      </svg>
+                                                    </button>
+                                                  </div>
+                                                ))}
                                               </>
                                             )}
                                           </div>
