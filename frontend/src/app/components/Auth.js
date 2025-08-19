@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 
-export default function Auth() {
+export default function Auth({ onShowRoleSelection }) {
   const [isLogin, setIsLogin] = useState(true)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -139,6 +139,18 @@ export default function Auth() {
             >
               {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
             </button>
+            
+            {isLogin && onShowRoleSelection && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  className="text-green-600 hover:text-green-500 text-sm font-medium"
+                  onClick={onShowRoleSelection}
+                >
+                  🏢 Create Business Account
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Development Mode Bypass Button */}

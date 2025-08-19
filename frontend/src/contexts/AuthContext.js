@@ -18,6 +18,7 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [session, setSession] = useState(null)
+  const [userProfile, setUserProfile] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -35,8 +36,17 @@ export const AuthProvider = ({ children }) => {
           user: mockUser,
           access_token: 'dev-token-123'
         }
+        const mockProfile = {
+          id: 'dev-user-123',
+          email: 'dev@example.com',
+          full_name: 'Development User',
+          user_role: 'individual',
+          business_id: null,
+          is_active: true
+        }
         setUser(mockUser)
         setSession(mockSession)
+        setUserProfile(mockProfile)
         setLoading(false)
         return true
       }
@@ -67,12 +77,41 @@ export const AuthProvider = ({ children }) => {
 
     getInitialSession()
 
+    // Function to fetch user profile
+    const fetchUserProfile = async (userId) => {
+      try {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/user/profile`, {
+          headers: {
+            'Authorization': `Bearer ${session?.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        if (response.ok) {
+          const profile = await response.json()
+          setUserProfile(profile)
+          return profile
+        }
+      } catch (error) {
+        console.error('Error fetching user profile:', error)
+      }
+      return null
+    }
+
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth state changed:', event, session?.user?.email)
         setSession(session)
         setUser(session?.user ?? null)
+        
+        // Fetch user profile if authenticated
+        if (session?.user) {
+          await fetchUserProfile(session.user.id)
+        } else {
+          setUserProfile(null)
+        }
+        
         setLoading(false)
       }
     )
@@ -158,12 +197,17 @@ export const AuthProvider = ({ children }) => {
   const value = {
     user,
     session,
+    userProfile,
     loading,
     login,
     register,
     logout,
     getAuthToken,
-    isAuthenticated: !!user
+    isAuthenticated: !!user,
+    isIndividual: userProfile?.user_role === 'individual',
+    isBusinessOwner: userProfile?.user_role === 'business_owner',
+    isBusinessClient: userProfile?.user_role === 'business_client',
+    businessId: userProfile?.business_id
   }
 
   return (

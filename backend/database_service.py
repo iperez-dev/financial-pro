@@ -263,11 +263,79 @@ class DatabaseService:
             return False
     
     # =============================================
+    # BUSINESS OPERATIONS
+    # =============================================
+    
+    @staticmethod
+    def create_business(owner_id: str, business_name: str, business_email: str = None) -> Dict:
+        """Create a new business account"""
+        try:
+            business_data = {
+                'name': business_name,
+                'owner_id': owner_id,
+                'business_email': business_email,
+                'business_type': 'tax_services',
+                'max_clients': 50,
+                'subscription_tier': 'basic'
+            }
+            result = supabase.table('businesses').insert(business_data).execute()
+            
+            if result.data:
+                business = result.data[0]
+                # Create business default categories
+                # TODO: Implement create_business_default_categories function
+                return business
+            return None
+        except Exception as e:
+            print(f"Error creating business: {e}")
+            return None
+    
+    @staticmethod
+    def get_business_info(owner_id: str) -> Dict:
+        """Get business information for owner"""
+        try:
+            result = supabase.table('businesses').select('*').eq('owner_id', owner_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting business info: {e}")
+            return None
+    
+    @staticmethod
+    def get_business_clients(business_id: str) -> List[Dict]:
+        """Get all clients for a business"""
+        try:
+            result = supabase.table('business_client_summary').select('*').eq('business_id', business_id).execute()
+            return result.data
+        except Exception as e:
+            print(f"Error getting business clients: {e}")
+            return []
+    
+    @staticmethod
+    def add_business_client(business_id: str, client_name: str, client_email: str, client_phone: str = None) -> Dict:
+        """Add a new client to a business"""
+        try:
+            # For now, we'll create a placeholder client entry
+            # In a full implementation, this would send an invitation email
+            client_data = {
+                'business_id': business_id,
+                'client_id': f"pending-{client_email}",  # Temporary ID until user signs up
+                'client_name': client_name,
+                'client_email': client_email,
+                'client_phone': client_phone,
+                'is_active': False  # Will be activated when user accepts invitation
+            }
+            result = supabase.table('business_clients').insert(client_data).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error adding business client: {e}")
+            return None
+
+    # =============================================
     # USER PROFILE OPERATIONS
     # =============================================
     
     @staticmethod
-    def get_or_create_user_profile(user_id: str, email: str = None) -> Dict:
+    def get_or_create_user_profile(user_id: str, email: str = None, user_role: str = 'individual') -> Dict:
         """Get user profile or create if doesn't exist"""
         try:
             # Try to get existing profile
@@ -280,17 +348,30 @@ class DatabaseService:
             profile_data = {
                 'id': user_id,
                 'email': email,
+                'user_role': user_role,
+                'is_active': True,
                 'created_at': datetime.now().isoformat()
             }
             result = supabase.table('profiles').insert(profile_data).execute()
             
             if result.data:
-                # Create default categories and Zelle recipients for new user
-                DatabaseService.create_default_categories(user_id)
-                DatabaseService.create_default_zelle_recipients(user_id)
+                # Create default categories and Zelle recipients for individual users
+                if user_role == 'individual':
+                    DatabaseService.create_default_categories(user_id)
+                    DatabaseService.create_default_zelle_recipients(user_id)
                 return result.data[0]
             
             return None
         except Exception as e:
             print(f"Error getting/creating user profile: {e}")
+            return None
+    
+    @staticmethod
+    def update_user_profile(user_id: str, updates: Dict) -> Dict:
+        """Update user profile"""
+        try:
+            result = supabase.table('profiles').update(updates).eq('id', user_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error updating user profile: {e}")
             return None

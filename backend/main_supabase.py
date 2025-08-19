@@ -473,6 +473,82 @@ async def learn_from_transaction(transaction_key: str, current_user: dict = Depe
     return {"message": "Merchant learning completed"}
 
 # =============================================
+# BUSINESS MANAGEMENT ENDPOINTS
+# =============================================
+
+@app.get("/user/profile")
+async def get_user_profile(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get current user's profile information"""
+    user_id = current_user["id"]
+    
+    profile = DatabaseService.get_or_create_user_profile(user_id, current_user.get("email"))
+    
+    if profile:
+        return profile
+    else:
+        raise HTTPException(status_code=404, detail="User profile not found")
+
+@app.post("/business/create")
+async def create_business(business_name: str, business_email: str = None, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Create a new business account"""
+    user_id = current_user["id"]
+    
+    # Update user profile to business owner
+    profile_updates = {'user_role': 'business_owner'}
+    DatabaseService.update_user_profile(user_id, profile_updates)
+    
+    # Create business
+    business = DatabaseService.create_business(user_id, business_name, business_email)
+    
+    if business:
+        return {"message": "Business created successfully", "business": business}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to create business")
+
+@app.get("/business/info")
+async def get_business_info(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get business information for current user"""
+    user_id = current_user["id"]
+    
+    business = DatabaseService.get_business_info(user_id)
+    
+    if business:
+        return business
+    else:
+        raise HTTPException(status_code=404, detail="Business not found")
+
+@app.get("/business/clients")
+async def get_business_clients(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get all clients for the current business"""
+    user_id = current_user["id"]
+    
+    # Get business info first
+    business = DatabaseService.get_business_info(user_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+    
+    clients = DatabaseService.get_business_clients(business['id'])
+    
+    return {"clients": clients}
+
+@app.post("/business/clients")
+async def add_business_client(client_name: str, client_email: str, client_phone: str = None, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Add a new client to the business"""
+    user_id = current_user["id"]
+    
+    # Get business info first
+    business = DatabaseService.get_business_info(user_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+    
+    client = DatabaseService.add_business_client(business['id'], client_name, client_email, client_phone)
+    
+    if client:
+        return {"message": "Client added successfully", "client": client}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to add client")
+
+# =============================================
 # ZELLE RECIPIENT ENDPOINTS
 # =============================================
 

@@ -4,14 +4,18 @@ import { useState } from 'react';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
-import Auth from './components/Auth';
+import BusinessDashboard from './components/BusinessDashboard';
+import AccountTypeSelection from './components/AccountTypeSelection';
+import IndividualAuthForm from './components/IndividualAuthForm';
+import BusinessAuthForm from './components/BusinessAuthForm';
 
 
 function FinancialProApp() {
-  const { user, loading, logout, getAuthToken } = useAuth();
+  const { user, userProfile, loading, logout, getAuthToken, isBusinessOwner, isIndividual } = useAuth();
   const [reportData, setReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [authFlow, setAuthFlow] = useState('account-selection'); // 'account-selection', 'individual-auth', 'business-auth'
 
   // Show loading spinner while checking authentication
   if (loading) {
@@ -22,9 +26,44 @@ function FinancialProApp() {
     );
   }
 
-  // Show auth form if not authenticated
+  // Show authentication flow if not authenticated
   if (!user) {
-    return <Auth />;
+    switch (authFlow) {
+      case 'individual-auth':
+        return (
+          <IndividualAuthForm 
+            onBack={() => setAuthFlow('account-selection')}
+          />
+        );
+      
+      case 'business-auth':
+        return (
+          <BusinessAuthForm 
+            onBack={() => setAuthFlow('account-selection')}
+          />
+        );
+      
+      default:
+        return (
+          <AccountTypeSelection 
+            onAccountTypeSelect={(type) => {
+              if (type === 'individual') {
+                setAuthFlow('individual-auth');
+              } else if (type === 'business') {
+                setAuthFlow('business-auth');
+              }
+            }}
+          />
+        );
+    }
+  }
+
+  // Route based on user role
+  if (userProfile) {
+    if (isBusinessOwner) {
+      return <BusinessDashboard />;
+    }
+    // For individual users and business clients, show the regular app
   }
 
   const handleFileUpload = async (file) => {
