@@ -340,7 +340,7 @@ function FinancialProApp() {
       />
 
       {/* Main Content Area */}
-      <div className={`${sidebarCollapsed ? 'ml-16' : 'ml-64'} flex flex-col min-h-screen transition-all duration-300`}>
+      <div className={`${sidebarCollapsed ? 'ml-18' : 'ml-68'} flex flex-col min-h-screen transition-all duration-300`}>
         {/* Header */}
         <header className="bg-white shadow-sm border-b">
           <div className="px-6 py-4">
@@ -383,7 +383,7 @@ function FinancialProApp() {
 
         {/* Main Content */}
         <main className="flex-1 overflow-auto">
-          <div className="max-w-7xl mx-auto px-6 py-8">
+          <div className="max-w-7xl mx-auto px-6 py-6">
             {/* Error Display */}
             {error && (
               <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">

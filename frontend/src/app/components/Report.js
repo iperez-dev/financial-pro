@@ -627,10 +627,11 @@ export default function Report({ data, onDownloadPDF }) {
         <table>
           <thead>
             <tr>
+              <th>Status</th>
               <th>Posting Date</th>
               <th>Description</th>
-              <th>Amount</th>
               <th>Category</th>
+              <th>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -640,10 +641,11 @@ export default function Report({ data, onDownloadPDF }) {
         const statusText = transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New';
         htmlContent += `
           <tr>
+            <td>${statusText}</td>
             <td>${transaction.date || 'N/A'}</td>
             <td>${transaction.description}</td>
+            <td>${transaction.category}</td>
             <td>${formatCurrency(transaction.amount)}</td>
-            <td>${statusText} - ${transaction.category}</td>
           </tr>
         `;
       });
@@ -863,32 +865,49 @@ export default function Report({ data, onDownloadPDF }) {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Posting Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Description
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
+                    Category
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
+                    Amount
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {transactions.map((transaction, index) => (
-                  <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <tr key={index} className={
+                    transaction.status === 'income' 
+                      ? 'bg-gray-100 opacity-60' 
+                      : index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                  }>
+                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
+                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        transaction.status === 'income' 
+                          ? 'bg-gray-200 text-gray-600'
+                          : transaction.status === 'saved' 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New'}
+                      </span>
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
                       {transaction.date || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate">
-                      {transaction.description}
+                    <td className={`px-6 py-4 text-sm max-w-md ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
+                      <div className="break-words">
+                        {transaction.description}
+                      </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatCurrency(transaction.amount)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
                       {showNewCategoryForm === transaction.transaction_key ? (
                         <div className="space-y-2 min-w-[200px]">
                           <input
@@ -927,15 +946,6 @@ export default function Report({ data, onDownloadPDF }) {
                         </div>
                       ) : (
                         <div className="flex items-center space-x-2">
-                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            transaction.status === 'income' 
-                              ? 'bg-blue-100 text-blue-800'
-                              : transaction.status === 'saved' 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-red-100 text-red-800'
-                          }`}>
-                            {transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New'}
-                          </span>
                           <select
                             value={transaction.category}
                             onChange={(e) => handleCategoryChange(transaction.transaction_key, e.target.value)}
@@ -964,6 +974,9 @@ export default function Report({ data, onDownloadPDF }) {
                           )}
                         </div>
                       )}
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
+                      {formatCurrency(transaction.amount)}
                     </td>
                   </tr>
                 ))}
