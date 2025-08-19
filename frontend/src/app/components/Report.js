@@ -1040,6 +1040,15 @@ export default function Report({ data, onDownloadPDF }) {
                             
                             {openDropdown === transaction.transaction_key && (
                               <div className="absolute z-10 mt-1 w-full min-w-[180px] bg-white border border-gray-300 rounded shadow-lg max-h-48 overflow-y-auto">
+                                <div
+                                  onClick={() => {
+                                    handleCategoryChange(transaction.transaction_key, '__NEW_CATEGORY__');
+                                    setOpenDropdown(null);
+                                  }}
+                                  className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs text-green-600 font-medium border-b border-gray-200"
+                                >
+                                  + Add New Category
+                                </div>
                                 {categories
                                   .sort((a, b) => a.name.localeCompare(b.name))
                                   .map((cat) => (
@@ -1070,15 +1079,6 @@ export default function Report({ data, onDownloadPDF }) {
                                       </button>
                                     </div>
                                   ))}
-                                <div
-                                  onClick={() => {
-                                    handleCategoryChange(transaction.transaction_key, '__NEW_CATEGORY__');
-                                    setOpenDropdown(null);
-                                  }}
-                                  className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs text-green-600 font-medium border-t border-gray-200"
-                                >
-                                  + Add New Category
-                                </div>
                               </div>
                             )}
                           </div>
