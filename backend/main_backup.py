@@ -1,19 +1,12 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import re
 import json
 import os
 from pydantic import BaseModel
-import hashlib
-from datetime import datetime
-
-# Import Supabase components
-from supabase_client import supabase
-from database_service import DatabaseService
-from auth_middleware import get_user_or_dev_mode, get_current_user
 
 app = FastAPI(title="Financial Pro API", version="1.0.0")
 
@@ -480,7 +473,7 @@ async def remove_transaction_category_override(transaction_key: str):
         raise HTTPException(status_code=500, detail=f"Error removing transaction category override: {str(e)}")
 
 @app.post("/process-expenses")
-async def process_expenses(file: UploadFile = File(...), current_user: dict = Depends(get_user_or_dev_mode)):
+async def process_expenses(file: UploadFile = File(...)):
     """
     Process uploaded Excel or CSV file and return categorized expense data
     """

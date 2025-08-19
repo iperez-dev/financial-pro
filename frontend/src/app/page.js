@@ -1,14 +1,31 @@
 'use client';
 
 import { useState } from 'react';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
+import Auth from './components/Auth';
 
 
-export default function Home() {
+function FinancialProApp() {
+  const { user, loading, logout, getAuthToken } = useAuth();
   const [reportData, setReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Show loading spinner while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  // Show auth form if not authenticated
+  if (!user) {
+    return <Auth />;
+  }
 
   const handleFileUpload = async (file) => {
     setIsLoading(true);
@@ -19,8 +36,15 @@ export default function Home() {
       const formData = new FormData();
       formData.append('file', file);
 
+      const token = getAuthToken();
+      const headers = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('http://localhost:8000/process-expenses', {
         method: 'POST',
+        headers,
         body: formData,
       });
 
@@ -58,14 +82,29 @@ export default function Home() {
                 <p className="text-gray-600">Expense Analysis & Reporting</p>
               </div>
             </div>
-            {reportData && (
+            <div className="flex items-center space-x-4">
+              {/* Development Mode Indicator */}
+              {typeof window !== 'undefined' && window.localStorage?.getItem('dev-mode') === 'true' && (
+                <span className="bg-yellow-100 text-yellow-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                  🛠️ DEV MODE
+                </span>
+              )}
+              <span className="text-sm text-gray-600">Welcome, {user.email}</span>
+              {reportData && (
+                <button
+                  onClick={handleReset}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  Upload New File
+                </button>
+              )}
               <button
-                onClick={handleReset}
-                className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                onClick={logout}
+                className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-sm font-medium"
               >
-                Upload New File
+                Logout
               </button>
-            )}
+            </div>
           </div>
         </div>
       </header>
@@ -114,5 +153,13 @@ export default function Home() {
 
 
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <AuthProvider>
+      <FinancialProApp />
+    </AuthProvider>
   );
 }
