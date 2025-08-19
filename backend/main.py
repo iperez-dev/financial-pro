@@ -377,6 +377,29 @@ async def delete_category(category_id: str):
     
     return {"message": "Category deleted successfully", "category": deleted_category}
 
+@app.post("/transactions/reset-categories")
+async def reset_all_transaction_categories():
+    """Reset all transaction categories to allow reassignment with new category structure"""
+    try:
+        # Clear all transaction overrides
+        overrides_file = os.path.join(os.path.dirname(__file__), 'transaction_overrides.json')
+        with open(overrides_file, 'w') as f:
+            json.dump({}, f, indent=2)
+        
+        # Clear merchant mappings
+        merchant_file = os.path.join(os.path.dirname(__file__), 'merchant_mappings.json')
+        with open(merchant_file, 'w') as f:
+            json.dump({}, f, indent=2)
+        
+        # Clear Zelle recipient mappings
+        zelle_file = os.path.join(os.path.dirname(__file__), 'zelle_recipients.json')
+        with open(zelle_file, 'w') as f:
+            json.dump({}, f, indent=2)
+        
+        return {"message": "All transaction categories have been reset successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error resetting categories: {str(e)}")
+
 # Transaction category management endpoints
 @app.put("/transactions/category")
 async def update_transaction_category(update: TransactionCategoryUpdate):

@@ -90,6 +90,84 @@ export default function Report({ data, onDownloadPDF }) {
     setDeleteModal(null);
   };
 
+  // Organize categories by parent groups for hierarchical display with custom order
+  const organizeCategories = (categories) => {
+    const groups = {};
+    
+    // Define the exact order for groups and subcategories
+    const groupOrder = [
+      // EXPENSES
+      'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 
+      'Healthcare', 'Personal', 'Financial', 'Debt', 'Other Expenses',
+      // INCOME  
+      'Business', 'Personal'
+    ];
+
+    const subcategoryOrder = {
+      'Housing': ['Mortgage', 'HOA Fee', 'Property Taxes', 'Home Insurance', 'Home Repairs'],
+      'Utilities': ['City Gas', 'FPL', 'Water and Sewer', 'Internet', 'Phone'],
+      'Transportation': ['Car Insurance', 'Car Repairs', 'Fuel', 'Toll'],
+      'Shopping & Food': ['Groceries', 'Dining Out', 'Amazon'],
+      'Child Expenses': ['Childcare', 'College Fund'],
+      'Healthcare': ['Health Insurance', 'Doctor Office', 'Pharmacy'],
+      'Personal': ['Allowance Jenny', 'Allowance Ivan', 'Donations', 'Subscriptions'],
+      'Financial': ['Savings Account', 'Investment (Robinhood)'],
+      'Debt': ['Credit Card Jenny', 'Credit Card Ivan', 'Student Loan', 'Car Payments'],
+      'Business': ['WBI'],
+      'Personal': ['Payroll Ivan', 'Payroll Jenny', 'Other Income'] // Income Personal
+    };
+
+    categories.forEach(category => {
+      // Extract parent and subcategory from the name
+      const nameParts = category.name.split(' - ');
+      if (nameParts.length === 2) {
+        const [parent, subcategory] = nameParts;
+        if (!groups[parent]) {
+          groups[parent] = [];
+        }
+        groups[parent].push({
+          ...category,
+          subcategory: subcategory
+        });
+      } else {
+        // Handle categories without parent (like "Other Expenses")
+        const parent = category.name;
+        if (!groups[parent]) {
+          groups[parent] = [];
+        }
+        groups[parent].push({
+          ...category,
+          subcategory: null
+        });
+      }
+    });
+
+    // Sort groups according to custom order and subcategories according to their custom order
+    const sortedGroups = {};
+    
+    groupOrder.forEach(groupName => {
+      if (groups[groupName]) {
+        if (subcategoryOrder[groupName]) {
+          // Sort subcategories according to custom order
+          const orderedSubcategories = [];
+          subcategoryOrder[groupName].forEach(subName => {
+            const found = groups[groupName].find(cat => 
+              (cat.subcategory || cat.name) === subName
+            );
+            if (found) {
+              orderedSubcategories.push(found);
+            }
+          });
+          sortedGroups[groupName] = orderedSubcategories;
+        } else {
+          sortedGroups[groupName] = groups[groupName];
+        }
+      }
+    });
+
+    return sortedGroups;
+  };
+
   if (!data || !data.summary) {
     return null;
   }
@@ -139,6 +217,25 @@ export default function Report({ data, onDownloadPDF }) {
   useEffect(() => {
     loadCategories();
   }, []);
+
+  // Reset all transaction categories (call this once to clear old categories)
+  const resetAllCategories = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/transactions/reset-categories', {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        console.log('All transaction categories have been reset');
+        // Reload the page to reflect changes
+        window.location.reload();
+      } else {
+        console.error('Failed to reset categories:', response.status);
+      }
+    } catch (err) {
+      console.error('Error resetting categories:', err);
+    }
+  };
 
   // Handle scroll to top button visibility
   useEffect(() => {
@@ -983,7 +1080,7 @@ export default function Report({ data, onDownloadPDF }) {
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
                       {showNewCategoryForm === transaction.transaction_key ? (
-                        <div className="space-y-2 min-w-[180px]">
+                        <div className="space-y-2 min-w-[320px]">
                           <input
                             type="text"
                             placeholder="Category name"
@@ -1024,7 +1121,7 @@ export default function Report({ data, onDownloadPDF }) {
                             <button
                               onClick={() => setOpenDropdown(openDropdown === transaction.transaction_key ? null : transaction.transaction_key)}
                               disabled={updatingTransaction === transaction.transaction_key || transaction.status === 'income'}
-                              className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[180px] text-left flex items-center justify-between ${
+                              className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[320px] text-left flex items-center justify-between ${
                                 transaction.status === 'income'
                                   ? 'bg-gray-50 cursor-not-allowed opacity-50'
                                   : updatingTransaction === transaction.transaction_key 
@@ -1032,14 +1129,14 @@ export default function Report({ data, onDownloadPDF }) {
                                   : 'bg-white hover:bg-gray-100 focus:bg-white'
                               }`}
                             >
-                              <span>{transaction.category}</span>
+                              <span>{transaction.category ? (transaction.category.includes(' - ') ? transaction.category.split(' - ')[1] : transaction.category) : 'Select Category'}</span>
                               <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                               </svg>
                             </button>
                             
                             {openDropdown === transaction.transaction_key && (
-                              <div className="absolute z-10 mt-1 w-full min-w-[180px] bg-white border border-gray-300 rounded shadow-lg max-h-48 overflow-y-auto">
+                              <div className="absolute z-10 mt-1 w-full min-w-[320px] bg-white border border-gray-300 rounded shadow-lg max-h-80 overflow-y-auto">
                                 <div
                                   onClick={() => {
                                     handleCategoryChange(transaction.transaction_key, '__NEW_CATEGORY__');
@@ -1049,36 +1146,110 @@ export default function Report({ data, onDownloadPDF }) {
                                 >
                                   + Add New Category
                                 </div>
-                                {categories
-                                  .sort((a, b) => a.name.localeCompare(b.name))
-                                  .map((cat) => (
-                                    <div
-                                      key={cat.id}
-                                      className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
-                                    >
-                                      <span
-                                        onClick={() => {
-                                          handleCategoryChange(transaction.transaction_key, cat.name);
-                                          setOpenDropdown(null);
-                                        }}
-                                        className="flex-1"
-                                      >
-                                        {cat.name}
-                                      </span>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          showDeleteModal(cat.id, cat.name);
-                                        }}
-                                        className="ml-2 text-gray-500 hover:text-gray-700 p-1"
-                                        title={`Delete ${cat.name}`}
-                                      >
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                      </button>
+                                {(() => {
+                                  const organizedCategories = organizeCategories(categories);
+                                  const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal', 'Financial', 'Debt', 'Other Expenses'];
+                                  const incomeGroups = ['Business', 'Personal'];
+                                  
+                                  const renderSection = (sectionName, groupNames) => (
+                                    <div key={sectionName}>
+                                      {/* Groups in this section */}
+                                      {groupNames.map(groupName => {
+                                        if (!organizedCategories[groupName]) return null;
+                                        const groupCategories = organizedCategories[groupName];
+                                        const isPersonalIncome = groupName === 'Personal' && sectionName === 'INCOME';
+                                        
+                                        return (
+                                          <div key={`${sectionName}-${groupName}`}>
+                                            {/* Check if this group has subcategories or is standalone */}
+                                            {groupCategories.length === 1 && !groupCategories[0].subcategory ? (
+                                              /* Standalone category (selectable) */
+                                              <div
+                                                key={groupCategories[0].id}
+                                                className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                              >
+                                                <span
+                                                  onClick={() => {
+                                                    handleCategoryChange(transaction.transaction_key, groupCategories[0].name);
+                                                    setOpenDropdown(null);
+                                                  }}
+                                                  className="flex-1 font-medium"
+                                                >
+                                                  {groupName}
+                                                </span>
+                                                <button
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    showDeleteModal(groupCategories[0].id, groupCategories[0].name);
+                                                  }}
+                                                  className="ml-2 text-gray-500 hover:text-gray-700 p-1"
+                                                  title={`Delete ${groupCategories[0].name}`}
+                                                >
+                                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                  </svg>
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              /* Group with subcategories */
+                                              <>
+                                                {/* Group Header (non-selectable) */}
+                                                <div className="px-2 py-1 text-xs font-semibold text-gray-700 bg-gray-50 border-b border-gray-100">
+                                                  {groupName}
+                                                </div>
+                                                {/* Subcategories (indented and selectable) */}
+                                                {groupCategories
+                                                  .filter(cat => {
+                                                    // Filter Personal categories based on section
+                                                    if (groupName === 'Personal') {
+                                                      const isIncomeCategory = cat.name.includes('Payroll') || cat.name.includes('Other Income');
+                                                      return isPersonalIncome ? isIncomeCategory : !isIncomeCategory;
+                                                    }
+                                                    return true;
+                                                  })
+                                                  .map((cat) => (
+                                                    <div
+                                                      key={cat.id}
+                                                      className="flex items-center justify-between pl-6 pr-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
+                                                    >
+                                                      <span
+                                                        onClick={() => {
+                                                          handleCategoryChange(transaction.transaction_key, cat.name);
+                                                          setOpenDropdown(null);
+                                                        }}
+                                                        className="flex-1"
+                                                      >
+                                                        {cat.subcategory || cat.name}
+                                                      </span>
+                                                      <button
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          showDeleteModal(cat.id, cat.name);
+                                                        }}
+                                                        className="ml-2 text-gray-500 hover:text-gray-700 p-1"
+                                                        title={`Delete ${cat.name}`}
+                                                      >
+                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                        </svg>
+                                                      </button>
+                                                    </div>
+                                                  ))}
+                                              </>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
                                     </div>
-                                  ))}
+                                  );
+                                  
+                                  return (
+                                    <>
+                                      {renderSection('EXPENSES', expenseGroups)}
+                                      {renderSection('INCOME', incomeGroups)}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
