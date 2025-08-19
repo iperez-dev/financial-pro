@@ -12,6 +12,32 @@ const COLORS = [
   '#64B5F6'
 ];
 
+// Helper function to format filename
+const formatFilename = (filename) => {
+  if (!filename) return 'Transactions';
+  
+  // Remove file extension
+  const nameWithoutExt = filename.replace(/\.(csv|xlsx|xls)$/i, '');
+  
+  // Handle the specific case: Chase1190_Activity_20250816
+  // Pattern: BankName + Number + _Activity_ + YYYYMMDD
+  const activityMatch = nameWithoutExt.match(/^([A-Za-z]+)(\d+)_Activity_(\d{8})$/);
+  if (activityMatch) {
+    const [, bankName, accountNumber, dateStr] = activityMatch;
+    
+    // Format date from YYYYMMDD to YYYY.MM.DD
+    const year = dateStr.substring(0, 4);
+    const month = dateStr.substring(4, 6);
+    const day = dateStr.substring(6, 8);
+    const formattedDate = `${year}.${month}.${day}`;
+    
+    return `${bankName} ${accountNumber} - Activity (${formattedDate})`;
+  }
+  
+  // Fallback: just replace underscores with spaces and capitalize first letter
+  return nameWithoutExt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+};
+
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
 
@@ -808,7 +834,7 @@ export default function Report({ data, onDownloadPDF }) {
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xl font-semibold text-gray-900">
-              All Transactions ({transactions.length})
+              {formatFilename(data.filename)} ({transactions.length})
             </h3>
           </div>
           

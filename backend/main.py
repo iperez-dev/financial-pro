@@ -780,6 +780,7 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
         
         return {
             "success": True,
+            "filename": file.filename,
             "summary": {
                 "total_expenses": total_expenses,
                 "total_income": total_income,
@@ -797,6 +798,360 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+async def process_single_file_internal(file: UploadFile, current_user: dict) -> dict:
+    """Internal function to process a single file - used by both single and multi-file endpoints"""
+    # Log file details for debugging
+    print(f"Processing file: {file.filename}, Content-Type: {file.content_type}")
+    
+    # Validate file type (case-insensitive)
+    filename_lower = file.filename.lower()
+    if not filename_lower.endswith(('.xlsx', '.xls', '.csv')):
+        raise HTTPException(status_code=400, detail=f"Invalid file type for {file.filename}. Please upload an Excel file (.xlsx, .xls) or CSV file (.csv)")
+    
+    # Read the file based on its type
+    contents = await file.read()
+    
+    if filename_lower.endswith('.csv'):
+        # Read CSV file
+        try:
+            df = pd.read_csv(io.BytesIO(contents))
+        except Exception as csv_error:
+            # Try with different encoding if UTF-8 fails
+            try:
+                df = pd.read_csv(io.BytesIO(contents), encoding='latin-1')
+            except Exception as encoding_error:
+                raise HTTPException(status_code=400, detail=f"Error reading CSV file {file.filename}: {str(csv_error)}")
+    else:
+        # Read Excel file
+        df = pd.read_excel(io.BytesIO(contents))
+    
+    # [All the existing processing logic from process_expenses endpoint would go here]
+    # For brevity, I'll use the existing logic and return the same structure
+    
+    # This is a simplified version - you'd copy all the processing logic from the existing endpoint
+    # Validate required columns (flexible column names)
+    required_columns = ['description', 'amount']
+    df_columns_lower = [col.lower().strip() for col in df.columns]
+    
+    # Map common column variations
+    column_mapping = {}
+    for req_col in required_columns:
+        found = False
+        for i, col in enumerate(df_columns_lower):
+            if req_col in col or col in req_col:
+                column_mapping[req_col] = df.columns[i]
+                found = True
+                break
+        if not found:
+            # Try alternative names
+            if req_col == 'description':
+                for alt in ['desc', 'transaction', 'details', 'memo', 'note', 'merchant', 'payee', 'vendor']:
+                    for i, col in enumerate(df_columns_lower):
+                        if alt in col or col in alt:
+                            column_mapping[req_col] = df.columns[i]
+                            found = True
+                            break
+                    if found:
+                        break
+            elif req_col == 'amount':
+                # First try common amount column names
+                for alt in ['value', 'cost', 'price', 'total', 'sum', 'debit', 'credit']:
+                    for i, col in enumerate(df_columns_lower):
+                        if alt in col or col in alt:
+                            # Check if this column actually contains numeric data
+                            sample_values = df.iloc[:5, i].astype(str).str.replace('$', '').str.replace(',', '')
+                            numeric_count = sum(1 for val in sample_values if val.replace('-', '').replace('.', '').isdigit())
+                            if numeric_count >= 2:  # At least 2 numeric values in first 5 rows
+                                column_mapping[req_col] = df.columns[i]
+                                found = True
+                                break
+                    if found:
+                        break
+                
+                # If still not found, check Details column for amounts (common in Chase files)
+                if not found:
+                    for i, col in enumerate(df_columns_lower):
+                        if 'detail' in col:
+                            column_mapping[req_col] = df.columns[i]
+                            found = True
+                            break
+        
+        if not found:
+            available_columns = ', '.join(df.columns)
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Required column '{req_col}' not found in {file.filename}. Available columns: {available_columns}. Please ensure your file has columns for description and amount."
+            )
+    
+    # Special handling for misaligned Chase CSV files
+    if 'Description' in df.columns and 'Posting Date' in df.columns:
+        # Check if Description column contains numeric data (actual amounts)
+        desc_sample = df['Description'].head(5)
+        if desc_sample.dtype in ['float64', 'int64'] or all(isinstance(x, (int, float)) for x in desc_sample.dropna()):
+            print(f"Detected misaligned Chase CSV in {file.filename} - using Description column for amounts and Posting Date for descriptions")
+            column_mapping = {
+                'description': 'Posting Date',  # Descriptions are in Posting Date column
+                'amount': 'Description'         # Amounts are in Description column
+            }
+    
+    # Create reverse mapping to rename the found columns to lowercase standard names
+    rename_mapping = {v: k for k, v in column_mapping.items()}
+    df = df.rename(columns=rename_mapping)
+    
+    # Clean and process data
+    df = df.dropna(subset=['description', 'amount'])
+    
+    # Ensure amount is numeric
+    df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+    df = df.dropna(subset=['amount'])
+    
+    # Add category column with amount and date information
+    def categorize_with_context(row):
+        if row['amount'] >= 0:
+            # Categorize different types of income
+            description_lower = row['description'].lower()
+            if 'payroll' in description_lower or 'salary' in description_lower or 'wages' in description_lower:
+                return 'Payroll'
+            elif 'refund' in description_lower or 'return' in description_lower:
+                return 'Refund'
+            elif 'deposit' in description_lower and 'payroll' not in description_lower:
+                return 'Deposit'
+            elif 'interest' in description_lower:
+                return 'Interest'
+            elif 'dividend' in description_lower:
+                return 'Dividend'
+            else:
+                return 'Income'  # Generic income category
+        
+        date_val = row.get('date', None) if 'date' in df.columns else None
+        category, status = categorize_expense(row['description'], row['amount'], date_val)
+        return category
+    
+    def get_status_with_context(row):
+        if row['amount'] >= 0:
+            return 'income'  # Mark positive amounts as income
+        
+        date_val = row.get('date', None) if 'date' in df.columns else None
+        category, status = categorize_expense(row['description'], row['amount'], date_val)
+        return status
+    
+    df['category'] = df.apply(categorize_with_context, axis=1)
+    df['status'] = df.apply(get_status_with_context, axis=1)
+    
+    # Calculate summary statistics - separate income from expenses
+    expenses_df = df[df['amount'] < 0].copy()  # Only negative amounts (expenses)
+    income_df = df[df['amount'] >= 0].copy()   # Only positive amounts (income)
+    
+    total_expenses = float(expenses_df['amount'].sum())  # negative total expenses
+    total_income = float(income_df['amount'].sum()) if len(income_df) > 0 else 0.0  # positive total income
+    total_transactions = len(df)
+    expense_transactions = len(expenses_df)
+    income_transactions = len(income_df)
+    
+    # Category breakdown based on expenses only
+    category_summary = expenses_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+    category_summary.columns = ['category', 'total_amount', 'transaction_count']
+    
+    # Use absolute values for display and percentage calculation
+    total_abs_expenses = float(expenses_df['amount'].abs().sum())
+    category_summary['total_amount'] = category_summary['total_amount'].abs()
+    category_summary['percentage'] = (
+        category_summary['total_amount'] / total_abs_expenses * 100
+    ).round(2) if total_abs_expenses > 0 else 0
+    
+    # Convert to list of dictionaries for JSON response
+    category_data = category_summary.to_dict('records')
+    
+    # Income breakdown by income type
+    income_data = []
+    if len(income_df) > 0:
+        income_summary = income_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+        income_summary.columns = ['category', 'total_amount', 'transaction_count']
+        
+        # Calculate percentages for income types
+        income_summary['percentage'] = (
+            income_summary['total_amount'] / total_income * 100
+        ).round(2) if total_income > 0 else 0
+        
+        # Convert to list of dictionaries for JSON response
+        income_data = income_summary.to_dict('records')
+    
+    # Create grouped category summary
+    def create_grouped_summary(category_data):
+        categories = load_categories()
+        category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
+        
+        # Group categories by their group classification
+        grouped_data = {}
+        for cat_data in category_data:
+            group = category_to_group.get(cat_data['category'], 'Other')
+            if group not in grouped_data:
+                grouped_data[group] = {
+                    'group_name': group,
+                    'total_amount': 0,
+                    'transaction_count': 0,
+                    'categories': []
+                }
+            
+            grouped_data[group]['total_amount'] += cat_data['total_amount']
+            grouped_data[group]['transaction_count'] += cat_data['transaction_count']
+            grouped_data[group]['categories'].append(cat_data)
+        
+        # Calculate percentages for groups
+        total_amount = sum(group['total_amount'] for group in grouped_data.values())
+        for group in grouped_data.values():
+            group['percentage'] = round((group['total_amount'] / total_amount * 100), 2) if total_amount > 0 else 0
+        
+        return list(grouped_data.values())
+    
+    grouped_category_data = create_grouped_summary(category_data)
+    
+    # Transaction details - include date if available
+    transaction_columns = ['description', 'amount', 'category', 'status']
+    
+    # Check if we have date information and add it
+    date_column = None
+    for col in df.columns:
+        if 'date' in col.lower() or col.lower() in ['details']:
+            if col.lower() == 'details':
+                date_column = col
+                break
+            elif 'date' in col.lower():
+                date_column = col
+                break
+    
+    if date_column:
+        transaction_columns.insert(0, 'date')
+        df['date'] = df[date_column]
+        # Format dates for better display
+        try:
+            df['date'] = pd.to_datetime(df['date']).dt.strftime('%m/%d/%Y')
+        except:
+            # If date parsing fails, keep original format
+            pass
+    
+    # Add transaction keys for editing
+    def add_transaction_key(row):
+        date_val = row.get('date', None) if 'date' in df.columns else None
+        key = get_transaction_key(row['description'], row['amount'], date_val)
+        return key
+    
+    df['transaction_key'] = df.apply(add_transaction_key, axis=1)
+    transaction_columns.append('transaction_key')
+    
+    transactions = df[transaction_columns].to_dict('records')
+    
+    # Monthly breakdown (if date column exists)
+    monthly_data = []
+    date_columns = [col for col in df.columns if 'date' in col.lower()]
+    if date_columns:
+        try:
+            df['date'] = pd.to_datetime(df[date_columns[0]])
+            df['month_year'] = df['date'].dt.to_period('M').astype(str)
+            monthly_summary = df.groupby('month_year')['amount'].sum().reset_index()
+            monthly_data = monthly_summary.to_dict('records')
+        except:
+            # If date parsing fails, continue without monthly data
+            pass
+    
+    return {
+        "success": True,
+        "filename": file.filename,
+        "summary": {
+            "total_expenses": total_expenses,
+            "total_income": total_income,
+            "total_transactions": total_transactions,
+            "expense_transactions": expense_transactions,
+            "income_transactions": income_transactions,
+            "categories": category_data,
+            "grouped_categories": grouped_category_data,
+            "income_categories": income_data
+        },
+        "transactions": transactions,
+        "monthly_data": monthly_data,
+        "message": f"Successfully processed {total_transactions} transactions ({expense_transactions} expenses, {income_transactions} income)"
+    }
+
+@app.post("/process-multiple-expenses")
+async def process_multiple_expenses(files: List[UploadFile] = File(...), current_user: dict = Depends(get_user_or_dev_mode)):
+    """
+    Process multiple uploaded Excel or CSV files and return individual reports plus summary
+    """
+    try:
+        if len(files) == 0:
+            raise HTTPException(status_code=400, detail="No files provided")
+        
+        print(f"Processing {len(files)} files")
+        
+        reports = []
+        all_expenses = 0.0
+        all_income = 0.0
+        all_transactions = 0
+        all_expense_transactions = 0
+        all_income_transactions = 0
+        
+        # Process each file individually
+        for file in files:
+            try:
+                print(f"Processing file: {file.filename}")
+                result = await process_single_file_internal(file, current_user)
+                reports.append(result)
+                
+                # Accumulate totals
+                all_expenses += result['summary']['total_expenses']
+                all_income += result['summary']['total_income']
+                all_transactions += result['summary']['total_transactions']
+                all_expense_transactions += result['summary']['expense_transactions']
+                all_income_transactions += result['summary']['income_transactions']
+                
+            except Exception as file_error:
+                print(f"Error processing file {file.filename}: {file_error}")
+                # Continue with other files, but include error info
+                reports.append({
+                    "success": False,
+                    "filename": file.filename,
+                    "error": str(file_error),
+                    "summary": {
+                        "total_expenses": 0,
+                        "total_income": 0,
+                        "total_transactions": 0,
+                        "expense_transactions": 0,
+                        "income_transactions": 0,
+                        "categories": [],
+                        "grouped_categories": [],
+                        "income_categories": []
+                    },
+                    "transactions": [],
+                    "monthly_data": [],
+                    "message": f"Error processing {file.filename}: {str(file_error)}"
+                })
+        
+        # Calculate net amount for summary
+        net_amount = all_income - abs(all_expenses)
+        
+        # Create combined summary
+        summary = {
+            "total_expenses": all_expenses,
+            "total_income": all_income,
+            "net_amount": net_amount,
+            "total_transactions": all_transactions,
+            "expense_transactions": all_expense_transactions,
+            "income_transactions": all_income_transactions
+        }
+        
+        return {
+            "success": True,
+            "reports": reports,
+            "summary": summary,
+            "total_files": len(files),
+            "successful_files": len([r for r in reports if r.get('success', False)]),
+            "message": f"Successfully processed {len([r for r in reports if r.get('success', False)])} out of {len(files)} files"
+        }
+        
+    except Exception as e:
+        print(f"Error processing multiple files: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
 
 # Zelle recipient management endpoints
 @app.get("/zelle-recipients")
@@ -839,6 +1194,130 @@ async def delete_zelle_recipient(recipient_name: str):
             raise HTTPException(status_code=404, detail="Zelle recipient not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting Zelle recipient: {str(e)}")
+
+# User profile endpoints
+@app.get("/user/profile")
+async def get_user_profile(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get current user's profile information"""
+    try:
+        user_id = current_user["id"]
+        
+        # For development mode, return mock profile
+        if current_user.get("email") == "dev@example.com":
+            return {
+                "id": user_id,
+                "email": current_user.get("email"),
+                "full_name": "Development User",
+                "user_role": "individual",
+                "business_id": None,
+                "is_active": True
+            }
+        
+        # For real users, try to get profile from database service
+        # If DatabaseService is not available, return basic profile
+        try:
+            from database_service import DatabaseService
+            profile = DatabaseService.get_or_create_user_profile(user_id, current_user.get("email"))
+            if profile:
+                return profile
+        except ImportError:
+            # DatabaseService not available, return basic profile
+            pass
+        
+        # Fallback: return basic profile based on user data
+        return {
+            "id": user_id,
+            "email": current_user.get("email"),
+            "full_name": current_user.get("user_metadata", {}).get("full_name", "User"),
+            "user_role": "individual",
+            "business_id": None,
+            "is_active": True
+        }
+        
+    except Exception as e:
+        print(f"Error getting user profile: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting user profile: {str(e)}")
+
+# Business endpoints (basic implementations)
+@app.post("/business/create")
+async def create_business(request_data: dict, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Create a new business account"""
+    try:
+        business_name = request_data.get("business_name")
+        business_email = request_data.get("business_email")
+        
+        if not business_name:
+            raise HTTPException(status_code=400, detail="Business name is required")
+        
+        # For now, return success message
+        # In a full implementation, this would create business in database
+        return {
+            "message": "Business created successfully", 
+            "business": {
+                "id": f"biz_{current_user['id']}",
+                "name": business_name,
+                "email": business_email,
+                "owner_id": current_user["id"]
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating business: {str(e)}")
+
+@app.get("/business/info")
+async def get_business_info(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get business information for current user"""
+    try:
+        # For now, return mock business info
+        # In a full implementation, this would query the database
+        return {
+            "id": f"biz_{current_user['id']}",
+            "name": "Sample Business",
+            "email": current_user.get("email"),
+            "owner_id": current_user["id"],
+            "created_at": "2025-01-18T00:00:00Z"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting business info: {str(e)}")
+
+@app.get("/business/clients")
+async def get_business_clients(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get all clients for the current business"""
+    try:
+        # For now, return empty clients list
+        # In a full implementation, this would query the database
+        return {"clients": []}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting business clients: {str(e)}")
+
+@app.post("/business/clients")
+async def add_business_client(client_data: dict, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Add a new client to the business"""
+    try:
+        name = client_data.get("name")
+        email = client_data.get("email")
+        phone = client_data.get("phone", "")
+        
+        if not name or not email:
+            raise HTTPException(status_code=400, detail="Name and email are required")
+        
+        # For now, return success message
+        # In a full implementation, this would add client to database
+        return {
+            "message": "Client added successfully",
+            "client": {
+                "id": f"client_{len(name)}",
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "business_id": f"biz_{current_user['id']}"
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error adding client: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

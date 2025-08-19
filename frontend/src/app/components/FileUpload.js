@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 export default function FileUpload({ onFileUpload, isLoading }) {
   const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -21,22 +21,22 @@ export default function FileUpload({ onFileUpload, isLoading }) {
     e.stopPropagation();
     setDragActive(false);
     
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      handleFile(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      handleFiles(files);
     }
   };
 
   const handleChange = (e) => {
     e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      handleFile(file);
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      handleFiles(files);
     }
   };
 
-  const handleFile = (file) => {
-    // Validate file type
+  const handleFiles = (files) => {
+    // Validate file types
     const allowedTypes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
       'application/vnd.ms-excel', // .xls
@@ -44,26 +44,30 @@ export default function FileUpload({ onFileUpload, isLoading }) {
       'application/csv' // .csv alternative MIME type
     ];
     
-    const fileName = file.name.toLowerCase();
-    if (!allowedTypes.includes(file.type) && 
-        !fileName.endsWith('.xlsx') && 
-        !fileName.endsWith('.xls') && 
-        !fileName.endsWith('.csv')) {
-      alert('Please upload an Excel file (.xlsx, .xls) or CSV file (.csv)');
+    const invalidFiles = files.filter(file => {
+      const fileName = file.name.toLowerCase();
+      return !allowedTypes.includes(file.type) && 
+             !fileName.endsWith('.xlsx') && 
+             !fileName.endsWith('.xls') && 
+             !fileName.endsWith('.csv');
+    });
+
+    if (invalidFiles.length > 0) {
+      alert(`Please upload only Excel files (.xlsx, .xls) or CSV files (.csv). Invalid files: ${invalidFiles.map(f => f.name).join(', ')}`);
       return;
     }
 
-    setSelectedFile(file);
-    onFileUpload(file);
+    setSelectedFiles(files);
+    onFileUpload(files);
   };
 
   return (
     <div className="w-full max-w-2xl mx-auto">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Upload Your Expense File</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Upload Your Expense Files</h2>
         <p className="text-gray-600">
-          Upload an Excel file (.xlsx, .xls) or CSV file (.csv) containing your expense data. 
-          Make sure your file has columns for description and amount.
+          Upload one or multiple Excel files (.xlsx, .xls) or CSV files (.csv) containing your expense data. 
+          Make sure your files have columns for description and amount.
         </p>
       </div>
 
@@ -81,6 +85,7 @@ export default function FileUpload({ onFileUpload, isLoading }) {
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
+          multiple
           onChange={handleChange}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           disabled={isLoading}
@@ -111,22 +116,25 @@ export default function FileUpload({ onFileUpload, isLoading }) {
           ) : (
             <div className="space-y-2">
               <p className="text-lg font-medium text-gray-900">
-                {selectedFile ? selectedFile.name : 'Drop your expense file here'}
+                {selectedFiles.length > 0 
+                  ? `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} selected`
+                  : 'Drop your expense files here'
+                }
               </p>
               <p className="text-gray-500">
                 or click to browse files
               </p>
               <p className="text-sm text-gray-400">
-                Supports .xlsx, .xls, and .csv files
+                Supports .xlsx, .xls, and .csv files • Multiple files allowed
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {selectedFile && !isLoading && (
+      {selectedFiles.length > 0 && !isLoading && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-          <div className="flex items-center">
+          <div className="flex items-center mb-3">
             <div className="flex-shrink-0">
               <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -134,12 +142,17 @@ export default function FileUpload({ onFileUpload, isLoading }) {
             </div>
             <div className="ml-3">
               <p className="text-sm font-medium text-green-800">
-                File selected: {selectedFile.name}
-              </p>
-              <p className="text-sm text-green-600">
-                Size: {(selectedFile.size / 1024).toFixed(1)} KB
+                {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} selected
               </p>
             </div>
+          </div>
+          <div className="space-y-2">
+            {selectedFiles.map((file, index) => (
+              <div key={index} className="flex justify-between items-center text-sm">
+                <span className="text-green-800 font-medium truncate">{file.name}</span>
+                <span className="text-green-600 ml-2">{(file.size / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
+import MultiReport from './components/MultiReport';
 import BusinessDashboard from './components/BusinessDashboard';
 import AccountTypeSelection from './components/AccountTypeSelection';
 import IndividualAuthForm from './components/IndividualAuthForm';
@@ -13,6 +14,7 @@ import BusinessAuthForm from './components/BusinessAuthForm';
 function FinancialProApp() {
   const { user, userProfile, loading, logout, getAuthToken, isBusinessOwner, isIndividual } = useAuth();
   const [reportData, setReportData] = useState(null);
+  const [multiReportData, setMultiReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [authFlow, setAuthFlow] = useState('account-selection'); // 'account-selection', 'individual-auth', 'business-auth'
@@ -66,14 +68,28 @@ function FinancialProApp() {
     // For individual users and business clients, show the regular app
   }
 
-  const handleFileUpload = async (file) => {
+  const handleFileUpload = async (files) => {
     setIsLoading(true);
     setError(null);
     setReportData(null);
+    setMultiReportData(null);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      
+      // Handle both single file (legacy) and multiple files
+      const fileArray = Array.isArray(files) ? files : [files];
+      
+      // Append files to FormData
+      if (fileArray.length === 1) {
+        // Single file - use existing endpoint
+        formData.append('file', fileArray[0]);
+      } else {
+        // Multiple files - use new endpoint
+        fileArray.forEach(file => {
+          formData.append('files', file);
+        });
+      }
 
       const token = getAuthToken();
       const headers = {};
@@ -81,7 +97,10 @@ function FinancialProApp() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch('http://localhost:8000/process-expenses', {
+      // Choose endpoint based on number of files
+      const endpoint = fileArray.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
+      
+      const response = await fetch(`http://localhost:8000/${endpoint}`, {
         method: 'POST',
         headers,
         body: formData,
@@ -89,14 +108,20 @@ function FinancialProApp() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to process file');
+        throw new Error(errorData.detail || 'Failed to process files');
       }
 
       const data = await response.json();
-      setReportData(data);
+      
+      // Set appropriate state based on response type
+      if (fileArray.length === 1) {
+        setReportData(data);
+      } else {
+        setMultiReportData(data);
+      }
     } catch (err) {
       setError(err.message);
-      console.error('Error uploading file:', err);
+      console.error('Error uploading files:', err);
     } finally {
       setIsLoading(false);
     }
@@ -104,6 +129,7 @@ function FinancialProApp() {
 
   const handleReset = () => {
     setReportData(null);
+    setMultiReportData(null);
     setError(null);
   };
 
@@ -129,7 +155,7 @@ function FinancialProApp() {
                 </span>
               )}
               <span className="text-sm text-gray-600">Welcome, {user.email}</span>
-              {reportData && (
+              {(reportData || multiReportData) && (
                 <button
                   onClick={handleReset}
                   className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
@@ -166,16 +192,18 @@ function FinancialProApp() {
           </div>
         )}
 
-        {!reportData ? (
+        {!reportData && !multiReportData ? (
           <FileUpload onFileUpload={handleFileUpload} isLoading={isLoading} />
+        ) : multiReportData ? (
+          <MultiReport data={multiReportData} />
         ) : (
           <Report data={reportData} />
         )}
 
-        {reportData && (
+        {(reportData || multiReportData) && (
           <div className="mt-8 text-center">
             <p className="text-gray-600">
-              {reportData.message}
+              {multiReportData ? multiReportData.message : reportData.message}
             </p>
           </div>
         )}
