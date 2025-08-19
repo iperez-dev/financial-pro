@@ -7,7 +7,8 @@ const Sidebar = ({
   currentPage = 'dashboard',
   onNavigate,
   user,
-  onLogout
+  onLogout,
+  onCollapseChange
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -88,7 +89,7 @@ const Sidebar = ({
   return (
     <div className={`bg-white border-r border-gray-200 transition-all duration-300 ${
       isCollapsed ? 'w-16' : 'w-64'
-    } flex flex-col h-full`}>
+    } flex flex-col h-screen fixed left-0 top-0 z-40`}>
       
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
@@ -105,7 +106,11 @@ const Sidebar = ({
             </div>
           )}
           <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
+            onClick={() => {
+              const newCollapsed = !isCollapsed;
+              setIsCollapsed(newCollapsed);
+              onCollapseChange?.(newCollapsed);
+            }}
             className="p-1.5 rounded-md hover:bg-gray-100 transition-colors"
             aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >

@@ -22,6 +22,7 @@ function FinancialProApp() {
   const [authFlow, setAuthFlow] = useState('account-selection'); // 'account-selection', 'individual-auth', 'business-auth'
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [currentPage, setCurrentPage] = useState('reports'); // Default to reports page
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Load saved reports from localStorage on component mount
   useEffect(() => {
@@ -38,6 +39,7 @@ function FinancialProApp() {
             setMultiReportData(combinedData);
             // Clear single report data since we have multiple
             setReportData(null);
+            // Upload area will be hidden automatically since reports exist
           }
         } catch (error) {
           console.error('Error loading saved reports:', error);
@@ -169,18 +171,38 @@ function FinancialProApp() {
     setError(null);
 
     try {
-      const formData = new FormData();
-      
       // Handle both single file (legacy) and multiple files
       const fileArray = Array.isArray(files) ? files : [files];
       
-      // Append files to FormData
-      if (fileArray.length === 1) {
+      // Check for duplicate files
+      const { duplicateFiles, uniqueFiles } = checkForDuplicateFiles(fileArray);
+      
+      // If there are duplicate files, show error and don't proceed
+      if (duplicateFiles.length > 0) {
+        const duplicateMessage = duplicateFiles.length === 1 
+          ? `The file "${duplicateFiles[0]}" has already been uploaded. Please try a different file.`
+          : `The following files have already been uploaded: ${duplicateFiles.join(', ')}. Please try different files.`;
+        
+        setError(duplicateMessage);
+        setIsLoading(false);
+        return;
+      }
+
+      // If no unique files to upload, return
+      if (uniqueFiles.length === 0) {
+        setIsLoading(false);
+        return;
+      }
+
+      const formData = new FormData();
+      
+      // Append unique files to FormData
+      if (uniqueFiles.length === 1) {
         // Single file - use existing endpoint
-        formData.append('file', fileArray[0]);
+        formData.append('file', uniqueFiles[0]);
       } else {
         // Multiple files - use new endpoint
-        fileArray.forEach(file => {
+        uniqueFiles.forEach(file => {
           formData.append('files', file);
         });
       }
@@ -191,8 +213,8 @@ function FinancialProApp() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // Choose endpoint based on number of files
-      const endpoint = fileArray.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
+      // Choose endpoint based on number of unique files
+      const endpoint = uniqueFiles.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
       
       const response = await fetch(`http://localhost:8000/${endpoint}`, {
         method: 'POST',
@@ -209,7 +231,7 @@ function FinancialProApp() {
       
       // Add new reports to existing ones instead of replacing
       let newReports = [];
-      if (fileArray.length === 1) {
+      if (uniqueFiles.length === 1) {
         // Single file response - convert to array format
         newReports = [data];
       } else {
@@ -226,6 +248,7 @@ function FinancialProApp() {
       if (combinedData) {
         setMultiReportData(combinedData);
         setReportData(null); // Clear single report view
+        // Upload area will be hidden automatically since reports exist
       }
 
     } catch (err) {
@@ -241,6 +264,7 @@ function FinancialProApp() {
     setMultiReportData(null);
     setAllReports([]);
     setError(null);
+    // Upload area will show automatically since no reports exist
     
     // Clear from localStorage
     if (user) {
@@ -258,15 +282,18 @@ function FinancialProApp() {
       // No reports left
       setMultiReportData(null);
       setReportData(null);
+      // Upload area will show automatically since no reports remain
     } else if (updatedReports.length === 1) {
       // Only one report left, show single report view
       setReportData(updatedReports[0]);
       setMultiReportData(null);
+      // Upload area will be hidden automatically since reports exist
     } else {
       // Multiple reports remain, update multi-report view
       const combinedData = createCombinedReportData(updatedReports);
       setMultiReportData(combinedData);
       setReportData(null);
+      // Upload area will be hidden automatically since reports exist
     }
   };
 
@@ -276,8 +303,32 @@ function FinancialProApp() {
     console.log(`Navigating to: ${pageId}`);
   };
 
+  const handleAddMoreReports = () => {
+    // Trigger file input click instead of showing upload area
+    const fileInput = document.getElementById('hidden-file-input');
+    if (fileInput) {
+      fileInput.click();
+    }
+  };
+
+  const checkForDuplicateFiles = (newFiles) => {
+    const existingFilenames = allReports.map(report => report.filename);
+    const duplicateFiles = [];
+    const uniqueFiles = [];
+
+    newFiles.forEach(file => {
+      if (existingFilenames.includes(file.name)) {
+        duplicateFiles.push(file.name);
+      } else {
+        uniqueFiles.push(file);
+      }
+    });
+
+    return { duplicateFiles, uniqueFiles };
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
       <Sidebar
         userType="individual"
@@ -285,10 +336,11 @@ function FinancialProApp() {
         onNavigate={handleNavigation}
         user={user}
         onLogout={logout}
+        onCollapseChange={setSidebarCollapsed}
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col">
+      <div className={`${sidebarCollapsed ? 'ml-16' : 'ml-64'} flex flex-col min-h-screen transition-all duration-300`}>
         {/* Header */}
         <header className="bg-white shadow-sm border-b">
           <div className="px-6 py-4">
@@ -309,12 +361,20 @@ function FinancialProApp() {
               </div>
               <div className="flex items-center space-x-4">
                 {(reportData || multiReportData) && currentPage === 'reports' && (
-                  <button
-                    onClick={handleReset}
-                    className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                  >
-                    Clear All Reports
-                  </button>
+                  <>
+                    <button
+                      onClick={handleAddMoreReports}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      Add More Reports
+                    </button>
+                    <button
+                      onClick={handleReset}
+                      className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      Clear All Reports
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -344,20 +404,40 @@ function FinancialProApp() {
             {/* Page Content Based on Current Page */}
             {currentPage === 'reports' && (
               <>
-                {/* File Upload Area */}
-                <FileUpload 
-                  onFileUpload={handleFileUpload} 
-                  isLoading={isLoading} 
-                  hasExistingReports={allReports.length > 0}
+                {/* File Upload Area - Only show when no reports exist */}
+                {(!reportData && !multiReportData) && (
+                  <FileUpload 
+                    onFileUpload={handleFileUpload} 
+                    isLoading={isLoading} 
+                    hasExistingReports={allReports.length > 0}
+                    existingFiles={allReports.map(report => report.filename)}
+                  />
+                )}
+
+                {/* Hidden file input for Add More Reports button */}
+                <input
+                  id="hidden-file-input"
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      const files = Array.from(e.target.files);
+                      handleFileUpload(files);
+                      // Clear the input to allow re-selecting the same file if needed
+                      e.target.value = '';
+                    }
+                  }}
+                  className="hidden"
                 />
 
                 {/* Show reports if they exist */}
                 {multiReportData ? (
-                  <div className="mt-12">
+                  <div>
                     <MultiReport data={multiReportData} onRemoveReport={handleRemoveReport} />
                   </div>
                 ) : reportData ? (
-                  <div className="mt-12">
+                  <div>
                     <Report data={reportData} />
                   </div>
                 ) : null}

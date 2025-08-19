@@ -14,6 +14,7 @@ export default function BusinessDashboard() {
   const [showAddClient, setShowAddClient] = useState(false)
   const [newClient, setNewClient] = useState({ name: '', email: '', phone: '' })
   const [currentPage, setCurrentPage] = useState('dashboard')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     fetchBusinessData()
@@ -87,6 +88,18 @@ export default function BusinessDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Sidebar */}
+      <Sidebar
+        userType="business"
+        currentPage={currentPage}
+        onNavigate={handleNavigation}
+        user={user}
+        onLogout={logout}
+        onCollapseChange={setSidebarCollapsed}
+      />
+
+      {/* Main Content Area */}
+      <div className={`${sidebarCollapsed ? 'ml-16' : 'ml-64'} flex flex-col min-h-screen transition-all duration-300`}>
       {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -341,6 +354,7 @@ export default function BusinessDashboard() {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   )

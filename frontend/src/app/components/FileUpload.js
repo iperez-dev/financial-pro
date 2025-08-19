@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export default function FileUpload({ onFileUpload, isLoading, hasExistingReports = false }) {
+export default function FileUpload({ onFileUpload, isLoading, hasExistingReports = false, existingFiles = [] }) {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
 
@@ -54,6 +54,20 @@ export default function FileUpload({ onFileUpload, isLoading, hasExistingReports
 
     if (invalidFiles.length > 0) {
       alert(`Please upload only Excel files (.xlsx, .xls) or CSV files (.csv). Invalid files: ${invalidFiles.map(f => f.name).join(', ')}`);
+      return;
+    }
+
+    // Check for duplicate files
+    const duplicateFiles = files.filter(file => 
+      existingFiles.includes(file.name)
+    );
+
+    if (duplicateFiles.length > 0) {
+      const duplicateMessage = duplicateFiles.length === 1 
+        ? `The file "${duplicateFiles[0].name}" has already been uploaded. Please try a different file.`
+        : `The following files have already been uploaded: ${duplicateFiles.map(f => f.name).join(', ')}. Please try different files.`;
+      
+      alert(duplicateMessage);
       return;
     }
 
