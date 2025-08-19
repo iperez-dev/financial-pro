@@ -1079,7 +1079,7 @@ export default function Report({ data, onDownloadPDF }) {
                           ? 'bg-gray-200 text-gray-600'
                           : transaction.status === 'saved' 
                           ? 'bg-green-100 text-green-800' 
-                          : 'bg-red-100 text-red-800'
+                          : 'bg-green-600 text-white'
                       }`}>
                         {transaction.status === 'income' ? 'Income' : transaction.status === 'saved' ? 'Saved' : 'New'}
                       </span>
