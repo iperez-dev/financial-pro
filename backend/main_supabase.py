@@ -125,41 +125,10 @@ def get_transaction_key(description: str, amount: float, date: str) -> str:
 
 def categorize_expense(description: str, amount: float, date: str, user_id: str) -> tuple:
     """
-    Categorize an expense using various methods
-    Returns (category_name, status)
+    Categorize an expense using transactions table as single source of truth.
+    No auto-saved sources. Default to ('Other','new').
     """
-    # Get user-specific data
-    transaction_overrides = DatabaseService.get_transaction_overrides(user_id)
-    merchant_mappings = DatabaseService.get_merchant_mappings(user_id)
-    zelle_recipients = DatabaseService.get_zelle_recipients(user_id)
-    categories = DatabaseService.get_categories(user_id)
-    
-    # Create transaction key for override lookup
-    transaction_key = get_transaction_key(description, amount, date)
-    
-    # 1. Check transaction overrides first (highest priority)
-    if transaction_key in transaction_overrides:
-        return transaction_overrides[transaction_key], 'saved'
-    
-    # 2. Check Zelle recipients
-    if is_zelle_payment(description):
-        recipient = extract_zelle_recipient(description)
-        if recipient and recipient in zelle_recipients:
-            return zelle_recipients[recipient], 'saved'
-    
-    # 3. Check merchant mappings
-    merchant_name = extract_merchant_name(description)
-    if merchant_name in merchant_mappings:
-        return merchant_mappings[merchant_name], 'saved'
-    
-    # 4. Try keyword matching with categories
-    description_lower = description.lower().strip()
-    for category in categories:
-        for keyword in category.get('keywords', []):
-            if keyword.lower() in description_lower:
-                return category['name'], 'new'
-    
-    # 5. Default fallback
+    # No external sources: overrides/merchant/zelle are ignored for status decisions
     return 'Other', 'new'
 
 # =============================================
@@ -447,16 +416,62 @@ async def delete_category(category_id: str, current_user: dict = Depends(get_use
 async def update_transaction_category(transaction_key: str, request: CategoryUpdateRequest, current_user: dict = Depends(get_user_or_dev_mode)):
     """Update the category of a specific transaction"""
     user_id = current_user["id"]
-    
-    # Save transaction override
-    success = DatabaseService.save_transaction_override(user_id, transaction_key, request.category)
-    
+
+    # Persist directly on transactions table (single source of truth)
+    success = DatabaseService.update_transaction_category(user_id, transaction_key, request.category)
+
     if success:
-        # Check if we should learn from this transaction
-        # TODO: Implement merchant learning logic
         return {"message": "Transaction category updated successfully", "learned_merchant": False}
     else:
         raise HTTPException(status_code=500, detail="Failed to update transaction category")
+
+@app.post("/transactions/reset-categories")
+async def reset_all_transaction_categories(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Reset all transaction categories to allow reassignment with new category structure"""
+    try:
+        user_id = current_user["id"]
+        
+        # Clear all transaction overrides
+        override_success = DatabaseService.clear_all_transaction_overrides(user_id)
+        
+        # Clear merchant mappings
+        merchant_success = DatabaseService.clear_all_merchant_mappings(user_id)
+        
+        # Clear Zelle recipient mappings
+        zelle_success = DatabaseService.clear_all_zelle_recipients(user_id)
+        
+        # Reset transaction categories and status in the transactions table
+        transactions_success = DatabaseService.reset_all_transaction_categories(user_id)
+        
+        if override_success and merchant_success and zelle_success and transactions_success:
+            return {"message": "All transaction categories have been reset successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to reset some category mappings")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error resetting categories: {str(e)}")
+
+@app.post("/transactions/delete-all")
+async def delete_all_transactions(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Delete all transactions for the user (nuclear option for complete clean slate)"""
+    try:
+        user_id = current_user["id"]
+        
+        # Delete all transactions
+        transactions_success = DatabaseService.delete_all_transactions(user_id)
+        
+        # Clear all related data
+        override_success = DatabaseService.clear_all_transaction_overrides(user_id)
+        merchant_success = DatabaseService.clear_all_merchant_mappings(user_id)
+        zelle_success = DatabaseService.clear_all_zelle_recipients(user_id)
+        
+        if transactions_success and override_success and merchant_success and zelle_success:
+            return {"message": "All transactions and category data have been deleted successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete some data")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting transactions: {str(e)}")
 
 # =============================================
 # MERCHANT LEARNING ENDPOINTS

@@ -241,8 +241,33 @@ export default function Report({ data, onDownloadPDF }) {
 
       if (response.ok) {
         console.log('All transaction categories have been reset');
-        // Reload the page to reflect changes
-        window.location.reload();
+        
+        // Clear the update status state to remove green checkmarks
+        setUpdateStatus({});
+        
+        // Update transactions to remove saved status and reset categories
+        setTransactions(prev => 
+          prev.map(t => ({
+            ...t,
+            category: t.status === 'income' ? t.category : 'Other', // Keep Income categories, reset others to Other
+            status: t.status === 'income' ? 'income' : 'new' // Keep income status, reset others to new
+          }))
+        );
+        
+        // Clear localStorage to prevent data from persisting on page refresh
+        // Get user ID from auth context or use a general key
+        const userKeys = Object.keys(localStorage).filter(key => key.startsWith('financial-pro-reports-'));
+        userKeys.forEach(key => {
+          console.log(`Clearing localStorage key: ${key}`);
+          localStorage.removeItem(key);
+        });
+        
+        console.log('Transaction statuses have been reset and localStorage cleared');
+        
+        // Reload the page to ensure completely clean state
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000); // Small delay to let the user see the success message
       } else {
         console.error('Failed to reset categories:', response.status);
       }
@@ -960,15 +985,27 @@ export default function Report({ data, onDownloadPDF }) {
     <div className="w-full max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-3xl font-bold text-gray-900">Expense Report</h2>
-        <button
-          onClick={handleDownloadPDF}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <span>Download PDF</span>
-        </button>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={resetAllCategories}
+            className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
+            title="Clear all saved category assignments but keep transactions"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>Reset Categories</span>
+          </button>
+          <button
+            onClick={handleDownloadPDF}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span>Download PDF</span>
+          </button>
+        </div>
       </div>
 
       <div ref={reportRef} className="bg-white">

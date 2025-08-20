@@ -153,6 +153,38 @@ class DatabaseService:
         except Exception as e:
             print(f"Error getting transactions: {e}")
             return []
+
+    @staticmethod
+    def update_transaction_category(user_id: str, transaction_key: str, category_name: str) -> bool:
+        """Persist a transaction's category directly on the transactions table as the source of truth"""
+        try:
+            # Try to resolve category_id by name (optional)
+            category_id = None
+            try:
+                cat_result = supabase.table('categories').select('id').eq('user_id', user_id).eq('name', category_name).limit(1).execute()
+                if cat_result.data:
+                    category_id = cat_result.data[0]['id']
+            except Exception as _:
+                pass
+
+            update_payload: Dict[str, Any] = {
+                'category_name': category_name,
+                'status': 'saved'
+            }
+            if category_id:
+                update_payload['category_id'] = category_id
+            else:
+                # If we can't resolve the category id, clear it to avoid stale references
+                update_payload['category_id'] = None
+
+            supabase.table('transactions').update(update_payload) \
+                .eq('user_id', user_id) \
+                .eq('transaction_key', transaction_key) \
+                .execute()
+            return True
+        except Exception as e:
+            print(f"Error updating transaction category: {e}")
+            return False
     
     # =============================================
     # MERCHANT MAPPINGS OPERATIONS
@@ -260,6 +292,64 @@ class DatabaseService:
             return True
         except Exception as e:
             print(f"Error saving transaction override: {e}")
+            return False
+    
+    @staticmethod
+    def clear_all_transaction_overrides(user_id: str) -> bool:
+        """Clear all transaction overrides for a user"""
+        try:
+            result = supabase.table('transaction_overrides').delete().eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error clearing transaction overrides: {e}")
+            return False
+    
+    @staticmethod
+    def clear_all_merchant_mappings(user_id: str) -> bool:
+        """Clear all merchant mappings for a user"""
+        try:
+            result = supabase.table('merchant_mappings').delete().eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error clearing merchant mappings: {e}")
+            return False
+    
+    @staticmethod
+    def clear_all_zelle_recipients(user_id: str) -> bool:
+        """Clear all Zelle recipient mappings for a user"""
+        try:
+            result = supabase.table('zelle_recipients').delete().eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error clearing Zelle recipients: {e}")
+            return False
+    
+    @staticmethod
+    def reset_all_transaction_categories(user_id: str) -> bool:
+        """Reset all transaction categories and status to default values"""
+        try:
+            # Update all transactions to reset categories and status
+            # Keep income transactions as they are, reset others to 'Other' and 'new'
+            supabase.table('transactions').update({
+                'category_name': 'Other',
+                'category_id': None,
+                'status': 'new',
+                'is_learned': False
+            }).eq('user_id', user_id).neq('status', 'income').execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error resetting transaction categories: {e}")
+            return False
+    
+    @staticmethod
+    def delete_all_transactions(user_id: str) -> bool:
+        """Delete all transactions for a user (nuclear option)"""
+        try:
+            result = supabase.table('transactions').delete().eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting all transactions: {e}")
             return False
     
     # =============================================
