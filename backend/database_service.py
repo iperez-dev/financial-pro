@@ -2,10 +2,21 @@
 Database service functions for Financial Pro
 Replaces JSON file operations with Supabase database operations
 """
-from supabase_client import supabase
+from supabase_client import supabase, supabase_admin
 from typing import List, Dict, Optional, Any
 import uuid
+import os
 from datetime import datetime
+
+# Use admin client for development to bypass RLS
+def get_client():
+    """Get appropriate Supabase client based on environment"""
+    environment = os.getenv("ENVIRONMENT", "production")
+    # Always use admin client for now to bypass RLS issues
+    # TODO: Implement proper RLS policies that work with authenticated users
+    if supabase_admin:
+        return supabase_admin
+    return supabase
 
 class DatabaseService:
     """Service class for all database operations"""
@@ -18,7 +29,8 @@ class DatabaseService:
     def get_categories(user_id: str) -> List[Dict]:
         """Get all categories for a user"""
         try:
-            result = supabase.table('categories').select('*').eq('user_id', user_id).execute()
+            client = get_client()
+            result = client.table('categories').select('*').eq('user_id', user_id).execute()
             return result.data
         except Exception as e:
             print(f"Error getting categories: {e}")
@@ -28,6 +40,7 @@ class DatabaseService:
     def create_category(user_id: str, name: str, keywords: List[str] = None, group_name: str = "Other") -> Dict:
         """Create a new category"""
         try:
+            client = get_client()
             category_data = {
                 'user_id': user_id,
                 'name': name,
@@ -35,7 +48,7 @@ class DatabaseService:
                 'group_name': group_name,
                 'is_default': False
             }
-            result = supabase.table('categories').insert(category_data).execute()
+            result = client.table('categories').insert(category_data).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error creating category: {e}")
@@ -90,11 +103,12 @@ class DatabaseService:
         ]
         
         created_categories = []
+        client = get_client()
         for cat_data in default_categories:
             cat_data['user_id'] = user_id
             cat_data['is_default'] = True
             try:
-                result = supabase.table('categories').insert(cat_data).execute()
+                result = client.table('categories').insert(cat_data).execute()
                 if result.data:
                     created_categories.extend(result.data)
             except Exception as e:

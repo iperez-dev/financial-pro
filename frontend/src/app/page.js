@@ -216,7 +216,7 @@ function FinancialProApp() {
       // Choose endpoint based on number of unique files
       const endpoint = uniqueFiles.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
       
-      const response = await fetch(`http://localhost:8000/${endpoint}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${endpoint}`, {
         method: 'POST',
         headers,
         body: formData,

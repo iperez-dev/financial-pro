@@ -19,7 +19,7 @@ export default function CategoryManager({ isOpen, onClose }) {
   const loadCategories = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:8000/categories');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`);
       const data = await response.json();
       setCategories(data.categories);
     } catch (err) {
@@ -40,7 +40,7 @@ export default function CategoryManager({ isOpen, onClose }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch('http://localhost:8000/categories', {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -73,7 +73,7 @@ export default function CategoryManager({ isOpen, onClose }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch(`http://localhost:8000/categories/${categoryId}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${categoryId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -102,7 +102,7 @@ export default function CategoryManager({ isOpen, onClose }) {
 
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8000/categories/${categoryId}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${categoryId}`, {
         method: 'DELETE',
       });
 

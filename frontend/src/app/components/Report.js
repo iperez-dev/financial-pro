@@ -2,6 +2,7 @@
 
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useRef, useState, useEffect } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -40,6 +41,7 @@ const formatFilename = (filename) => {
 
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
+  const { getAuthToken } = useAuth();
 
   const [categories, setCategories] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -67,8 +69,11 @@ export default function Report({ data, onDownloadPDF }) {
     if (!deleteModal) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/categories/${deleteModal.categoryId}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${deleteModal.categoryId}`, {
         method: 'DELETE',
+        headers: {
+          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
+        }
       });
 
       if (response.ok) {
@@ -235,8 +240,11 @@ export default function Report({ data, onDownloadPDF }) {
   // Reset all transaction categories (call this once to clear old categories)
   const resetAllCategories = async () => {
     try {
-      const response = await fetch('http://localhost:8000/transactions/reset-categories', {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/reset-categories`, {
         method: 'POST',
+        headers: {
+          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
+        }
       });
 
       if (response.ok) {
@@ -313,7 +321,11 @@ export default function Report({ data, onDownloadPDF }) {
 
   const loadCategories = async () => {
     try {
-      const response = await fetch('http://localhost:8000/categories');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
+        headers: {
+          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
+        }
+      });
       const data = await response.json();
       setCategories(data.categories);
     } catch (err) {
@@ -340,10 +352,11 @@ export default function Report({ data, onDownloadPDF }) {
         throw new Error('Transaction not found');
       }
       
-      const response = await fetch(`http://localhost:8000/transactions/${encodeURIComponent(transactionKey)}/category`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/${encodeURIComponent(transactionKey)}/category`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
         },
         body: JSON.stringify({ category: newCategory }),
       });
@@ -397,10 +410,11 @@ export default function Report({ data, onDownloadPDF }) {
           console.log(`📱 Learning Zelle recipient: ${recipient} -> ${category}`);
           
           // Save Zelle recipient mapping
-          const zelleResponse = await fetch(`http://localhost:8000/zelle-recipients`, {
+          const zelleResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/zelle-recipients`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
             },
             body: JSON.stringify({ 
               recipient: recipient,
@@ -432,10 +446,11 @@ export default function Report({ data, onDownloadPDF }) {
         }
       } else {
         // Handle regular merchant learning
-        const learnResponse = await fetch(`http://localhost:8000/transactions/${encodeURIComponent(transactionKey)}/learn`, {
+        const learnResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/${encodeURIComponent(transactionKey)}/learn`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
           },
           body: JSON.stringify({ 
             description: description,
@@ -592,10 +607,11 @@ export default function Report({ data, onDownloadPDF }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch('http://localhost:8000/categories', {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
         },
         body: JSON.stringify({
           name: newCategoryName.trim(),

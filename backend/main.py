@@ -50,104 +50,130 @@ class TransactionCategoryUpdate(BaseModel):
 class CategoryUpdateRequest(BaseModel):
     category: str
 
-# Categories file path
-CATEGORIES_FILE = "categories.json"
-TRANSACTION_OVERRIDES_FILE = "transaction_overrides.json"
-MERCHANT_MAPPINGS_FILE = "merchant_mappings.json"
-ZELLE_RECIPIENTS_FILE = "zelle_recipients.json"
+# Database-based category management
+# Categories are now stored in the database and managed per user
 
-# Default categories
-DEFAULT_CATEGORIES = [
-    {"id": "mortgage", "name": "Mortgage", "keywords": ["mortgage", "home loan"], "group": "Housing"},
-    {"id": "hoa", "name": "HOA", "keywords": ["hoa", "homeowners", "association"], "group": "Housing"},
-    {"id": "city_gas", "name": "City Gas", "keywords": ["city gas", "gas utility", "natural gas"], "group": "Utilities"},
-    {"id": "fpl", "name": "FPL", "keywords": ["fpl", "florida power", "electric"], "group": "Utilities"},
-    {"id": "internet", "name": "Internet", "keywords": ["internet", "wifi", "broadband", "comcast", "xfinity"], "group": "Utilities"},
-    {"id": "phone", "name": "Phone", "keywords": ["phone", "mobile", "cell", "verizon", "att", "t-mobile"], "group": "Utilities"},
-    {"id": "toll", "name": "Toll", "keywords": ["toll", "sunpass", "ezpass", "turnpike"], "group": "Transportation"},
-    {"id": "gas_station", "name": "Gas Station", "keywords": ["gas station", "shell", "bp", "exxon", "chevron", "fuel"], "group": "Transportation"},
-    {"id": "student_loan", "name": "Student Loan", "keywords": ["student loan", "education", "navient", "sallie mae"], "group": "Education"},
-    {"id": "car_insurance", "name": "Car Insurance", "keywords": ["car insurance", "auto insurance", "geico", "state farm", "progressive"], "group": "Insurance"},
-    {"id": "credit_card_jenny", "name": "Credit Card Jenny", "keywords": ["jenny", "credit card jenny"], "group": "Credit Cards"},
-    {"id": "credit_card_ivan", "name": "Credit Card Ivan", "keywords": ["ivan", "credit card ivan"], "group": "Credit Cards"},
-    {"id": "childcare", "name": "ChildCare", "keywords": ["childcare", "daycare", "babysitter", "nanny"], "group": "Family"}
-]
+# Database-based category management functions
+def get_categories_for_user(user_id: str):
+    """Get categories from database for a specific user"""
+    try:
+        categories = DatabaseService.get_categories(user_id)
+        
+        # If user has no categories, create default categories
+        if not categories:
+            DatabaseService.create_default_categories(user_id)
+            categories = DatabaseService.get_categories(user_id)
+        
+        # Convert database format to legacy format for compatibility
+        legacy_format = []
+        for cat in categories:
+            legacy_format.append({
+                "id": str(cat["id"]),
+                "name": cat["name"],
+                "keywords": cat.get("keywords", []),
+                "group": cat.get("group_name", "Other")
+            })
+        
+        return legacy_format
+    except Exception as e:
+        print(f"Error getting categories for user {user_id}: {e}")
+        return []
 
-# Category management functions
-def load_categories():
-    """Load categories from JSON file or create default ones"""
-    if os.path.exists(CATEGORIES_FILE):
-        try:
-            with open(CATEGORIES_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    
-    # Create default categories file
-    save_categories(DEFAULT_CATEGORIES)
-    return DEFAULT_CATEGORIES
+def get_category_by_name_for_user(user_id: str, category_name: str):
+    """Get category by name for a specific user"""
+    try:
+        categories = get_categories_for_user(user_id)
+        return next((cat for cat in categories if cat['name'] == category_name), None)
+    except Exception as e:
+        print(f"Error getting category by name: {e}")
+        return None
 
-def save_categories(categories):
-    """Save categories to JSON file"""
-    with open(CATEGORIES_FILE, 'w') as f:
-        json.dump(categories, f, indent=2)
+def get_transaction_override_for_user(user_id: str, transaction_key: str):
+    """Get transaction override from database for a specific user and transaction"""
+    try:
+        overrides = DatabaseService.get_transaction_overrides(user_id)
+        return {"new_category_name": overrides.get(transaction_key)} if transaction_key in overrides else None
+    except Exception as e:
+        print(f"Error getting transaction override: {e}")
+        return None
 
-def get_category_by_id(category_id: str):
-    """Get category by ID"""
-    categories = load_categories()
-    return next((cat for cat in categories if cat['id'] == category_id), None)
+def save_transaction_override_for_user(user_id: str, transaction_key: str, category_name: str):
+    """Save transaction override to database for a specific user"""
+    try:
+        # Get category by name to get the category_id
+        categories = get_categories_for_user(user_id)
+        category = next((cat for cat in categories if cat['name'] == category_name), None)
+        
+        if not category:
+            print(f"Category '{category_name}' not found for user {user_id}")
+            return False
+        
+        return DatabaseService.save_transaction_override(
+            user_id, transaction_key, category["id"], category_name
+        )
+    except Exception as e:
+        print(f"Error saving transaction override: {e}")
+        return False
 
-def load_transaction_overrides():
-    """Load transaction category overrides from JSON file"""
-    if os.path.exists(TRANSACTION_OVERRIDES_FILE):
-        try:
-            with open(TRANSACTION_OVERRIDES_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    return {}
+def get_merchant_mapping_for_user(user_id: str, merchant_name: str):
+    """Get merchant mapping from database for a specific user"""
+    try:
+        mappings = DatabaseService.get_merchant_mappings(user_id)
+        return {"category_name": mappings.get(merchant_name)} if merchant_name in mappings else None
+    except Exception as e:
+        print(f"Error getting merchant mapping: {e}")
+        return None
 
-def save_transaction_overrides(overrides):
-    """Save transaction category overrides to JSON file"""
-    with open(TRANSACTION_OVERRIDES_FILE, 'w') as f:
-        json.dump(overrides, f, indent=2)
+def save_merchant_mapping_for_user(user_id: str, merchant_name: str, category_name: str):
+    """Save merchant mapping to database for a specific user"""
+    try:
+        # Get category by name to get the category_id
+        categories = get_categories_for_user(user_id)
+        category = next((cat for cat in categories if cat['name'] == category_name), None)
+        
+        if not category:
+            print(f"Category '{category_name}' not found for user {user_id}")
+            return False
+        
+        return DatabaseService.save_merchant_mapping(
+            user_id, merchant_name, category["id"], category_name
+        )
+    except Exception as e:
+        print(f"Error saving merchant mapping: {e}")
+        return False
 
-def load_merchant_mappings():
-    """Load merchant-to-category mappings from JSON file"""
-    if os.path.exists(MERCHANT_MAPPINGS_FILE):
-        try:
-            with open(MERCHANT_MAPPINGS_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    return {}
+def get_zelle_recipients_for_user(user_id: str):
+    """Get Zelle recipient mappings from database for a specific user"""
+    try:
+        recipients = DatabaseService.get_zelle_recipients(user_id)
+        
+        # Convert to legacy format (dict with recipient_name -> category_name)
+        legacy_format = {}
+        for recipient in recipients:
+            legacy_format[recipient["recipient_name"]] = recipient["category_name"]
+        
+        return legacy_format
+    except Exception as e:
+        print(f"Error getting Zelle recipients: {e}")
+        return {}
 
-def save_merchant_mappings(mappings):
-    """Save merchant-to-category mappings to JSON file"""
-    with open(MERCHANT_MAPPINGS_FILE, 'w') as f:
-        json.dump(mappings, f, indent=2)
-
-def load_zelle_recipients():
-    """Load Zelle recipient-to-category mappings from JSON file"""
-    if os.path.exists(ZELLE_RECIPIENTS_FILE):
-        try:
-            with open(ZELLE_RECIPIENTS_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    
-    # Default Zelle recipient mappings
-    default_mappings = {
-        "Doris": "Phone",
-        "Yamilka Maikel": "ChildCare"
-    }
-    save_zelle_recipients(default_mappings)
-    return default_mappings
-
-def save_zelle_recipients(mappings):
-    """Save Zelle recipient-to-category mappings to JSON file"""
-    with open(ZELLE_RECIPIENTS_FILE, 'w') as f:
-        json.dump(mappings, f, indent=2)
+def save_zelle_recipient_for_user(user_id: str, recipient_name: str, category_name: str):
+    """Save Zelle recipient mapping to database for a specific user"""
+    try:
+        # Get category by name to get the category_id
+        categories = get_categories_for_user(user_id)
+        category = next((cat for cat in categories if cat['name'] == category_name), None)
+        
+        if not category:
+            print(f"Category '{category_name}' not found for user {user_id}")
+            return False
+        
+        return DatabaseService.save_zelle_recipient(
+            user_id, recipient_name, category["id"], category_name
+        )
+    except Exception as e:
+        print(f"Error saving Zelle recipient: {e}")
+        return False
 
 def extract_zelle_recipient(description: str) -> str:
     """Extract recipient name from Zelle payment description"""
@@ -262,7 +288,7 @@ def get_transaction_key(description: str, amount: float, date: str = None) -> st
     return f"{clean_desc}_{hash_hex[:8]}"
 
 # Expense categorization logic
-def categorize_expense(description: str, amount: float = None, date: str = None) -> tuple:
+def categorize_expense(user_id: str, description: str, amount: float = None, date: str = None) -> tuple:
     """
     Categorize expense based on overrides, Zelle recipients, merchant matching, keywords, or fallback to hash distribution
     Returns tuple of (category_name, status) where status is 'saved', 'override', or 'new'
@@ -270,15 +296,15 @@ def categorize_expense(description: str, amount: float = None, date: str = None)
     # Check for manual overrides first
     if amount is not None:
         transaction_key = get_transaction_key(description, amount, date)
-        overrides = load_transaction_overrides()
-        if transaction_key in overrides:
-            return overrides[transaction_key], 'saved'  # Manual overrides are considered 'saved'
+        override = get_transaction_override_for_user(user_id, transaction_key)
+        if override:
+            return override["new_category_name"], 'saved'  # Manual overrides are considered 'saved'
     
     # Check for Zelle payments (special handling)
     if is_zelle_payment(description):
         recipient = extract_zelle_recipient(description)
         if recipient:
-            zelle_mappings = load_zelle_recipients()
+            zelle_mappings = get_zelle_recipients_for_user(user_id)
             if recipient in zelle_mappings:
                 print(f"📱 Zelle payment to {recipient} categorized as {zelle_mappings[recipient]}")
                 return zelle_mappings[recipient], 'saved'  # Zelle recipient matches are 'saved'
@@ -286,11 +312,11 @@ def categorize_expense(description: str, amount: float = None, date: str = None)
     # Check for merchant matching (skip for Zelle payments)
     if not is_zelle_payment(description):
         merchant_name = extract_merchant_name(description)
-        merchant_mappings = load_merchant_mappings()
-        if merchant_name in merchant_mappings:
-            return merchant_mappings[merchant_name], 'saved'  # Merchant matches are 'saved'
+        merchant_mapping = get_merchant_mapping_for_user(user_id, merchant_name)
+        if merchant_mapping:
+            return merchant_mapping["category_name"], 'saved'  # Merchant matches are 'saved'
     
-    categories = load_categories()
+    categories = get_categories_for_user(user_id)
     description_lower = description.lower().strip()
     
     # Try keyword matching
@@ -312,35 +338,74 @@ async def root():
     """Health check endpoint"""
     return {"message": "Financial Pro API is running"}
 
+@app.get("/debug")
+async def debug_endpoint(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Debug endpoint to check user and categories"""
+    try:
+        user_id = current_user["id"]
+        
+        # Get categories using different methods
+        categories_main = get_categories_for_user(user_id)
+        categories_db = DatabaseService.get_categories(user_id)
+        
+        return {
+            "user_id": user_id,
+            "user_email": current_user.get("email"),
+            "environment": os.getenv("ENVIRONMENT", "production"),
+            "categories_main_count": len(categories_main),
+            "categories_db_count": len(categories_db),
+            "sample_categories": categories_main[:3] if categories_main else [],
+            "database_service_sample": categories_db[:3] if categories_db else []
+        }
+    except Exception as e:
+        return {"error": str(e), "user": current_user}
+
 # Category management endpoints
 @app.get("/categories")
-async def get_categories():
-    """Get all categories"""
-    categories = load_categories()
-    return {"categories": categories}
+async def get_categories(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get all categories for the current user"""
+    try:
+        user_id = current_user["id"]
+        categories = get_categories_for_user(user_id)
+        return {"categories": categories}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting categories: {str(e)}")
 
 @app.post("/categories")
-async def create_category(category: CategoryCreate):
-    """Create a new category"""
-    categories = load_categories()
-    
-    # Generate ID from name
-    category_id = category.name.lower().replace(' ', '_').replace('-', '_')
-    
-    # Check if category already exists
-    if any(cat['id'] == category_id for cat in categories):
-        raise HTTPException(status_code=400, detail="Category already exists")
-    
-    new_category = {
-        "id": category_id,
-        "name": category.name,
-        "keywords": category.keywords
-    }
-    
-    categories.append(new_category)
-    save_categories(categories)
-    
-    return {"message": "Category created successfully", "category": new_category}
+async def create_category(category: CategoryCreate, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Create a new category for the current user"""
+    try:
+        user_id = current_user["id"]
+        
+        # Check if category already exists
+        existing_category = get_category_by_name_for_user(user_id, category.name)
+        if existing_category:
+            raise HTTPException(status_code=400, detail="Category already exists")
+        
+        # Create new category in database
+        new_category = DatabaseService.create_category(
+            user_id, 
+            category.name, 
+            category.keywords, 
+            category.group
+        )
+        
+        if not new_category:
+            raise HTTPException(status_code=500, detail="Failed to create category")
+        
+        # Convert to legacy format for response
+        response_category = {
+            "id": str(new_category["id"]),
+            "name": new_category["name"],
+            "keywords": new_category.get("keywords", []),
+            "group": new_category.get("group_name", "Other")
+        }
+        
+        return {"message": "Category created successfully", "category": response_category}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating category: {str(e)}")
 
 @app.put("/categories/{category_id}")
 async def update_category(category_id: str, category_update: CategoryUpdate):
@@ -431,19 +496,20 @@ async def set_transaction_category(transaction_key: str, category: str):
         raise HTTPException(status_code=500, detail=f"Error setting transaction category: {str(e)}")
 
 @app.put("/transactions/{transaction_key}/category")
-async def update_transaction_category_by_key(transaction_key: str, category_data: CategoryUpdateRequest):
+async def update_transaction_category_by_key(transaction_key: str, category_data: CategoryUpdateRequest, current_user: dict = Depends(get_user_or_dev_mode)):
     """Update category for a specific transaction using transaction key and learn from it"""
     try:
         print(f"Received PUT request for transaction_key: {transaction_key}")
         print(f"Category data: {category_data}")
         
+        user_id = current_user["id"]
         category = category_data.category
         print(f"Extracted category: {category}")
         
         # Save the specific transaction override
-        overrides = load_transaction_overrides()
-        overrides[transaction_key] = category
-        save_transaction_overrides(overrides)
+        success = save_transaction_override_for_user(user_id, transaction_key, category)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save transaction override")
         
         print(f"Successfully updated category for {transaction_key} to {category}")
         return {
@@ -457,9 +523,10 @@ async def update_transaction_category_by_key(transaction_key: str, category_data
         raise HTTPException(status_code=500, detail=f"Error updating transaction category: {str(e)}")
 
 @app.post("/transactions/{transaction_key}/learn")
-async def learn_from_transaction(transaction_key: str, request_data: dict):
+async def learn_from_transaction(transaction_key: str, request_data: dict, current_user: dict = Depends(get_user_or_dev_mode)):
     """Learn merchant pattern from a transaction and update similar transactions"""
     try:
+        user_id = current_user["id"]
         description = request_data.get('description', '')
         category = request_data.get('category', '')
         
@@ -473,9 +540,9 @@ async def learn_from_transaction(transaction_key: str, request_data: dict):
         print(f"Extracted merchant name: {merchant_name}")
         
         # Save merchant mapping
-        merchant_mappings = load_merchant_mappings()
-        merchant_mappings[merchant_name] = category
-        save_merchant_mappings(merchant_mappings)
+        success = save_merchant_mapping_for_user(user_id, merchant_name, category)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save merchant mapping")
         
         print(f"Saved merchant mapping: {merchant_name} -> {category}")
         
@@ -648,7 +715,7 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
                     return 'Income'  # Generic income category
             
             date_val = row.get('date', None) if 'date' in df.columns else None
-            category, status = categorize_expense(row['description'], row['amount'], date_val)
+            category, status = categorize_expense(current_user["id"], row['description'], row['amount'], date_val)
             return category
         
         def get_status_with_context(row):
@@ -657,7 +724,7 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
                 return 'income'  # Mark positive amounts as income
             
             date_val = row.get('date', None) if 'date' in df.columns else None
-            category, status = categorize_expense(row['description'], row['amount'], date_val)
+            category, status = categorize_expense(current_user["id"], row['description'], row['amount'], date_val)
             return status
         
         df['category'] = df.apply(categorize_with_context, axis=1)
@@ -710,7 +777,7 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
         
         # Create grouped category summary
         def create_grouped_summary(category_data):
-            categories = load_categories()
+            categories = get_categories_for_user(current_user["id"])
             category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
             
             # Group categories by their group classification
@@ -1178,27 +1245,29 @@ async def process_multiple_expenses(files: List[UploadFile] = File(...), current
 
 # Zelle recipient management endpoints
 @app.get("/zelle-recipients")
-async def get_zelle_recipients():
-    """Get all Zelle recipient mappings"""
+async def get_zelle_recipients(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get all Zelle recipient mappings for the current user"""
     try:
-        recipients = load_zelle_recipients()
+        user_id = current_user["id"]
+        recipients = get_zelle_recipients_for_user(user_id)
         return {"recipients": recipients}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading Zelle recipients: {str(e)}")
 
 @app.post("/zelle-recipients")
-async def add_zelle_recipient(recipient_data: dict):
-    """Add or update a Zelle recipient mapping"""
+async def add_zelle_recipient(recipient_data: dict, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Add or update a Zelle recipient mapping for the current user"""
     try:
+        user_id = current_user["id"]
         recipient_name = recipient_data.get('recipient')
         category = recipient_data.get('category')
         
         if not recipient_name or not category:
             raise HTTPException(status_code=400, detail="Recipient name and category are required")
         
-        recipients = load_zelle_recipients()
-        recipients[recipient_name] = category
-        save_zelle_recipients(recipients)
+        success = save_zelle_recipient_for_user(user_id, recipient_name, category)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save Zelle recipient mapping")
         
         return {"message": "Zelle recipient mapping added successfully", "recipient": recipient_name, "category": category}
     except Exception as e:
@@ -1344,5 +1413,5 @@ async def add_business_client(client_data: dict, current_user: dict = Depends(ge
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
 

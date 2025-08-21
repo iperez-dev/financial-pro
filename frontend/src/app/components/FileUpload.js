@@ -5,6 +5,8 @@ import { useState } from 'react';
 export default function FileUpload({ onFileUpload, isLoading, hasExistingReports = false, existingFiles = [] }) {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [progress, setProgress] = useState(0);
+  const [showToast, setShowToast] = useState(false);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -72,7 +74,21 @@ export default function FileUpload({ onFileUpload, isLoading, hasExistingReports
     }
 
     setSelectedFiles(files);
-    onFileUpload(files);
+    setProgress(0);
+    setShowToast(true);
+    // Simulate smooth progress while backend works
+    const interval = setInterval(() => {
+      setProgress(prev => (prev < 90 ? prev + 2 : prev));
+    }, 200);
+
+    const done = () => {
+      clearInterval(interval);
+      setProgress(100);
+      setTimeout(() => setShowToast(false), 800);
+    };
+
+    // Delegate upload to parent and finish progress when it resolves
+    Promise.resolve(onFileUpload(files)).finally(done);
   };
 
   return (
@@ -88,6 +104,24 @@ export default function FileUpload({ onFileUpload, isLoading, hasExistingReports
           }
         </p>
       </div>
+
+      {/* Upload progress toast */}
+      {showToast && (
+        <div className="fixed bottom-6 right-6 bg-white shadow-lg border border-gray-200 rounded-lg p-4 w-80 z-50">
+          <div className="flex items-start">
+            <div className="flex-shrink-0 mr-3">
+              <div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-gray-900">Processing files…</p>
+              <p className="text-xs text-gray-600 mt-1">This may take a moment for larger CSV/XLSX files.</p>
+              <div className="mt-2 h-2 bg-gray-100 rounded">
+                <div className="h-2 bg-blue-500 rounded transition-all" style={{ width: `${progress}%` }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors ${

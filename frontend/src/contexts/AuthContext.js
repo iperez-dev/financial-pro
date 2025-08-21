@@ -67,6 +67,10 @@ export const AuthProvider = ({ children }) => {
         } else {
           setSession(session)
           setUser(session?.user ?? null)
+          // If we already have a session, fetch profile immediately with the token from this session
+          if (session?.user && session?.access_token) {
+            await fetchUserProfile(session.user.id, session.access_token)
+          }
         }
       } catch (error) {
         console.error('Error in getInitialSession:', error)
@@ -78,11 +82,13 @@ export const AuthProvider = ({ children }) => {
     getInitialSession()
 
     // Function to fetch user profile
-    const fetchUserProfile = async (userId) => {
+    const fetchUserProfile = async (userId, tokenFromEvent) => {
       try {
+        // Prefer the token passed from the auth state event to avoid race conditions.
+        const bearer = tokenFromEvent || session?.access_token || undefined
         const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/user/profile`, {
           headers: {
-            'Authorization': `Bearer ${session?.access_token}`,
+            ...(bearer ? { 'Authorization': `Bearer ${bearer}` } : {}),
             'Content-Type': 'application/json'
           }
         })
@@ -107,7 +113,7 @@ export const AuthProvider = ({ children }) => {
         
         // Fetch user profile if authenticated
         if (session?.user) {
-          await fetchUserProfile(session.user.id)
+          await fetchUserProfile(session.user.id, session?.access_token)
         } else {
           setUserProfile(null)
         }
