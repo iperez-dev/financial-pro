@@ -12,7 +12,7 @@ from datetime import datetime
 
 # Import Supabase components
 from supabase_client import supabase
-from database_service import DatabaseService
+from database_service import DatabaseService, get_client
 from auth_middleware import get_user_or_dev_mode, get_current_user
 
 app = FastAPI(title="Financial Pro API", version="1.0.0")
@@ -51,12 +51,12 @@ class CategoryUpdateRequest(BaseModel):
 # Database-based category management
 # Categories are now stored in the database and managed per user
 
-def _get_categories_for_user(user_id: str) -> List[Dict]:
+def _get_categories_for_user(user_id: str, user_token: Optional[str] = None) -> List[Dict]:
     """Fetch categories from database and map to response shape used by the frontend."""
-    categories = DatabaseService.get_categories(user_id)
+    categories = DatabaseService.get_categories(user_id, user_token)
     if not categories:
-        DatabaseService.create_default_categories(user_id)
-        categories = DatabaseService.get_categories(user_id)
+        DatabaseService.create_default_categories(user_id, user_token)
+        categories = DatabaseService.get_categories(user_id, user_token)
     return [
         {
             "id": str(cat.get("id")),
@@ -67,37 +67,37 @@ def _get_categories_for_user(user_id: str) -> List[Dict]:
         for cat in categories or []
     ]
 
-def _get_transaction_override(user_id: str, transaction_key: str):
-    overrides = DatabaseService.get_transaction_overrides(user_id)
+def _get_transaction_override(user_id: str, transaction_key: str, user_token: Optional[str] = None):
+    overrides = DatabaseService.get_transaction_overrides(user_id, user_token)
     if transaction_key in overrides:
         return {"new_category_name": overrides.get(transaction_key)}
     return None
 
-def _save_transaction_override(user_id: str, transaction_key: str, category_name: str) -> bool:
-    cats = _get_categories_for_user(user_id)
+def _save_transaction_override(user_id: str, transaction_key: str, category_name: str, user_token: Optional[str] = None) -> bool:
+    cats = _get_categories_for_user(user_id, user_token)
     cat = next((c for c in cats if c["name"] == category_name), None)
     if not cat:
         return False
-    return DatabaseService.save_transaction_override(user_id, transaction_key, category_name, cat.get("id"))
+    return DatabaseService.save_transaction_override(user_id, transaction_key, category_name, cat.get("id"), user_token)
 
-def _get_merchant_mapping(user_id: str, merchant_name: str):
-    mappings = DatabaseService.get_merchant_mappings(user_id)
+def _get_merchant_mapping(user_id: str, merchant_name: str, user_token: Optional[str] = None):
+    mappings = DatabaseService.get_merchant_mappings(user_id, user_token)
     if merchant_name in mappings:
         return {"category_name": mappings.get(merchant_name)}
     return None
 
-def _save_merchant_mapping(user_id: str, merchant_name: str, category_name: str) -> bool:
-    cats = _get_categories_for_user(user_id)
+def _save_merchant_mapping(user_id: str, merchant_name: str, category_name: str, user_token: Optional[str] = None) -> bool:
+    cats = _get_categories_for_user(user_id, user_token)
     cat = next((c for c in cats if c["name"] == category_name), None)
-    return DatabaseService.save_merchant_mapping(user_id, merchant_name, category_name, cat.get("id") if cat else None)
+    return DatabaseService.save_merchant_mapping(user_id, merchant_name, category_name, cat.get("id") if cat else None, user_token)
 
-def _get_zelle_map(user_id: str) -> Dict[str, str]:
-    return DatabaseService.get_zelle_recipients(user_id)
+def _get_zelle_map(user_id: str, user_token: Optional[str] = None) -> Dict[str, str]:
+    return DatabaseService.get_zelle_recipients(user_id, user_token)
 
-def _save_zelle_recipient(user_id: str, recipient_name: str, category_name: str) -> bool:
-    cats = _get_categories_for_user(user_id)
+def _save_zelle_recipient(user_id: str, recipient_name: str, category_name: str, user_token: Optional[str] = None) -> bool:
+    cats = _get_categories_for_user(user_id, user_token)
     cat = next((c for c in cats if c["name"] == category_name), None)
-    return DatabaseService.save_zelle_recipient(user_id, recipient_name, category_name, cat.get("id") if cat else None)
+    return DatabaseService.save_zelle_recipient(user_id, recipient_name, category_name, cat.get("id") if cat else None, user_token)
 
 def extract_zelle_recipient(description: str) -> str:
     """Extract recipient name from Zelle payment description"""
@@ -212,7 +212,17 @@ def get_transaction_key(description: str, amount: float, date: str = None) -> st
     return f"{clean_desc}_{hash_hex[:8]}"
 
 # Expense categorization logic
-def categorize_expense(user_id: str, description: str, amount: float = None, date: str = None) -> tuple:
+def categorize_expense(
+    user_id: str,
+    description: str,
+    amount: float = None,
+    date: str = None,
+    user_token: Optional[str] = None,
+    overrides: Optional[Dict[str, str]] = None,
+    merchant_mappings: Optional[Dict[str, str]] = None,
+    zelle_mappings: Optional[Dict[str, str]] = None,
+    categories: Optional[List[Dict]] = None,
+) -> tuple:
     """
     Categorize expense based on overrides, Zelle recipients, merchant matching, keywords, or fallback to hash distribution
     Returns tuple of (category_name, status) where status is 'saved', 'override', or 'new'
@@ -220,15 +230,18 @@ def categorize_expense(user_id: str, description: str, amount: float = None, dat
     # Check for manual overrides first
     if amount is not None:
         transaction_key = get_transaction_key(description, amount, date)
-        override = _get_transaction_override(user_id, transaction_key)
-        if override:
-            return override["new_category_name"], 'saved'  # Manual overrides are considered 'saved'
+        if overrides is None:
+            overrides = DatabaseService.get_transaction_overrides(user_id, user_token)
+        override_name = overrides.get(transaction_key) if overrides else None
+        if override_name:
+            return override_name, 'saved'  # Manual overrides are considered 'saved'
     
     # Check for Zelle payments (special handling)
     if is_zelle_payment(description):
         recipient = extract_zelle_recipient(description)
         if recipient:
-            zelle_mappings = _get_zelle_map(user_id)
+            if zelle_mappings is None:
+                zelle_mappings = _get_zelle_map(user_id, user_token)
             if recipient in zelle_mappings:
                 print(f"📱 Zelle payment to {recipient} categorized as {zelle_mappings[recipient]}")
                 return zelle_mappings[recipient], 'saved'  # Zelle recipient matches are 'saved'
@@ -236,11 +249,14 @@ def categorize_expense(user_id: str, description: str, amount: float = None, dat
     # Check for merchant matching (skip for Zelle payments)
     if not is_zelle_payment(description):
         merchant_name = extract_merchant_name(description)
-        merchant_mapping = _get_merchant_mapping(user_id, merchant_name)
+        if merchant_mappings is None:
+            merchant_mappings = DatabaseService.get_merchant_mappings(user_id, user_token)
+        merchant_mapping = {"category_name": merchant_mappings.get(merchant_name)} if merchant_mappings and merchant_name in merchant_mappings else None
         if merchant_mapping:
             return merchant_mapping["category_name"], 'saved'  # Merchant matches are 'saved'
     
-    categories = _get_categories_for_user(user_id)
+    if categories is None:
+        categories = _get_categories_for_user(user_id, user_token)
     description_lower = description.lower().strip()
     
     # Try keyword matching
@@ -269,8 +285,9 @@ async def debug_endpoint(current_user: dict = Depends(get_user_or_dev_mode)):
         user_id = current_user["id"]
         
         # Get categories using different methods
-        categories_main = _get_categories_for_user(user_id)
-        categories_db = DatabaseService.get_categories(user_id)
+        token = current_user.get("token")
+        categories_main = _get_categories_for_user(user_id, token)
+        categories_db = DatabaseService.get_categories(user_id, token)
         
         return {
             "user_id": user_id,
@@ -290,7 +307,8 @@ async def get_categories(current_user: dict = Depends(get_user_or_dev_mode)):
     """Get all categories for the current user"""
     try:
         user_id = current_user["id"]
-        categories = _get_categories_for_user(user_id)
+        token = current_user.get("token")
+        categories = _get_categories_for_user(user_id, token)
         return {"categories": categories}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting categories: {str(e)}")
@@ -307,11 +325,13 @@ async def create_category(category: CategoryCreate, current_user: dict = Depends
             raise HTTPException(status_code=400, detail="Category already exists")
         
         # Create new category in database
+        token = current_user.get("token")
         new_category = DatabaseService.create_category(
-            user_id, 
-            category.name, 
-            category.keywords, 
-            category.group
+            user_id,
+            category.name,
+            category.keywords,
+            category.group,
+            token
         )
         
         if not new_category:
@@ -345,7 +365,8 @@ async def update_category(category_id: str, category_update: CategoryUpdate, cur
             updates['group_name'] = category_update.group
         if not updates:
             return {"message": "No changes provided"}
-        updated = DatabaseService.update_category(user_id, category_id, updates)
+        token = current_user.get("token")
+        updated = DatabaseService.update_category(user_id, category_id, updates, token)
         if not updated:
             raise HTTPException(status_code=404, detail="Category not found or update failed")
         # Map to frontend shape
@@ -366,7 +387,8 @@ async def delete_category(category_id: str, current_user: dict = Depends(get_use
     """Delete a category (DB-backed)"""
     try:
         user_id = current_user["id"]
-        success = DatabaseService.delete_category(user_id, category_id)
+        token = current_user.get("token")
+        success = DatabaseService.delete_category(user_id, category_id, token)
         if not success:
             raise HTTPException(status_code=404, detail="Category not found or delete failed")
         return {"message": "Category deleted successfully"}
@@ -381,10 +403,11 @@ async def reset_all_transaction_categories(current_user: dict = Depends(get_user
     try:
         user_id = current_user["id"]
         # Clear overrides, merchant mappings, zelle recipients and reset transactions via DatabaseService
-        DatabaseService.clear_all_transaction_overrides(user_id)
-        DatabaseService.clear_all_merchant_mappings(user_id)
-        DatabaseService.clear_all_zelle_recipients(user_id)
-        DatabaseService.reset_all_transaction_categories(user_id)
+        token = current_user.get("token")
+        DatabaseService.clear_all_transaction_overrides(user_id, token)
+        DatabaseService.clear_all_merchant_mappings(user_id, token)
+        DatabaseService.clear_all_zelle_recipients(user_id, token)
+        DatabaseService.reset_all_transaction_categories(user_id, token)
         return {"message": "All transaction categories and learned mappings have been reset successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error resetting categories: {str(e)}")
@@ -405,7 +428,8 @@ async def update_transaction_category_by_key(transaction_key: str, category_data
         print(f"Extracted category: {category}")
         
         # Save the specific transaction override
-        success = _save_transaction_override(user_id, transaction_key, category)
+        token = current_user.get("token")
+        success = _save_transaction_override(user_id, transaction_key, category, token)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save transaction override")
         
@@ -458,8 +482,9 @@ async def remove_transaction_category_override(transaction_key: str, current_use
     """Remove category override for a specific transaction (DB-backed)"""
     try:
         user_id = current_user["id"]
-        from supabase_client import supabase
-        result = supabase.table('transaction_overrides').delete().eq('user_id', user_id).eq('transaction_key', transaction_key).execute()
+        token = current_user.get("token")
+        client = get_client(token)
+        result = client.table('transaction_overrides').delete().eq('user_id', user_id).eq('transaction_key', transaction_key).execute()
         if result.data is None or len(result.data) == 0:
             raise HTTPException(status_code=404, detail="Transaction override not found")
         return {"message": "Transaction category override removed successfully"}
@@ -608,7 +633,8 @@ async def process_single_file_internal(file: UploadFile, current_user: dict) -> 
                 return 'Income'  # Generic income category
         
         date_val = row.get('date', None) if 'date' in df.columns else None
-        category, status = categorize_expense(user_id, row['description'], row['amount'], date_val)
+        token = current_user.get("token")
+        category, status = categorize_expense(user_id, row['description'], row['amount'], date_val, token)
         return category
     
     def get_status_with_context(row):
@@ -616,9 +642,63 @@ async def process_single_file_internal(file: UploadFile, current_user: dict) -> 
             return 'income'  # Mark positive amounts as income
         
         date_val = row.get('date', None) if 'date' in df.columns else None
-        category, status = categorize_expense(user_id, row['description'], row['amount'], date_val)
+        token = current_user.get("token")
+        category, status = categorize_expense(user_id, row['description'], row['amount'], date_val, token)
         return status
     
+    # Preload frequently used mappings once per file to avoid per-row DB calls
+    token = current_user.get("token")
+    preload_overrides = DatabaseService.get_transaction_overrides(user_id, token)
+    preload_merchants = DatabaseService.get_merchant_mappings(user_id, token)
+    preload_zelle = _get_zelle_map(user_id, token)
+    preload_categories = _get_categories_for_user(user_id, token)
+
+    def categorize_with_context(row):
+        if row['amount'] >= 0:
+            description_lower = row['description'].lower()
+            if 'payroll' in description_lower or 'salary' in description_lower or 'wages' in description_lower:
+                return 'Payroll'
+            elif 'refund' in description_lower or 'return' in description_lower:
+                return 'Refund'
+            elif 'deposit' in description_lower and 'payroll' not in description_lower:
+                return 'Deposit'
+            elif 'interest' in description_lower:
+                return 'Interest'
+            elif 'dividend' in description_lower:
+                return 'Dividend'
+            else:
+                return 'Income'
+        date_val = row.get('date', None) if 'date' in df.columns else None
+        category, status = categorize_expense(
+            user_id,
+            row['description'],
+            row['amount'],
+            date_val,
+            token,
+            overrides=preload_overrides,
+            merchant_mappings=preload_merchants,
+            zelle_mappings=preload_zelle,
+            categories=preload_categories,
+        )
+        return category
+
+    def get_status_with_context(row):
+        if row['amount'] >= 0:
+            return 'income'
+        date_val = row.get('date', None) if 'date' in df.columns else None
+        _, status = categorize_expense(
+            user_id,
+            row['description'],
+            row['amount'],
+            date_val,
+            token,
+            overrides=preload_overrides,
+            merchant_mappings=preload_merchants,
+            zelle_mappings=preload_zelle,
+            categories=preload_categories,
+        )
+        return status
+
     df['category'] = df.apply(categorize_with_context, axis=1)
     df['status'] = df.apply(get_status_with_context, axis=1)
     
@@ -662,7 +742,8 @@ async def process_single_file_internal(file: UploadFile, current_user: dict) -> 
     
     # Create grouped category summary
     def create_grouped_summary(category_data):
-        categories = _get_categories_for_user(user_id)
+        token = current_user.get("token")
+        categories = _get_categories_for_user(user_id, token)
         category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
         
         # Group categories by their group classification
@@ -842,7 +923,8 @@ async def get_zelle_recipients(current_user: dict = Depends(get_user_or_dev_mode
     """Get all Zelle recipient mappings for the current user"""
     try:
         user_id = current_user["id"]
-        recipients = _get_zelle_map(user_id)
+        token = current_user.get("token")
+        recipients = _get_zelle_map(user_id, token)
         return {"recipients": recipients}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading Zelle recipients: {str(e)}")
@@ -858,7 +940,8 @@ async def add_zelle_recipient(recipient_data: dict, current_user: dict = Depends
         if not recipient_name or not category:
             raise HTTPException(status_code=400, detail="Recipient name and category are required")
         
-        success = _save_zelle_recipient(user_id, recipient_name, category)
+        token = current_user.get("token")
+        success = _save_zelle_recipient(user_id, recipient_name, category, token)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save Zelle recipient mapping")
         
@@ -873,8 +956,9 @@ async def delete_zelle_recipient(recipient_name: str, current_user: dict = Depen
         user_id = current_user["id"]
         # Implement delete by setting is_active=false or deleting the row
         # Here we'll delete the row
-        from supabase_client import supabase
-        result = supabase.table('zelle_recipients').delete().eq('user_id', user_id).eq('recipient_name', recipient_name).execute()
+        token = current_user.get("token")
+        client = get_client(token)
+        result = client.table('zelle_recipients').delete().eq('user_id', user_id).eq('recipient_name', recipient_name).execute()
         if result.data is None or len(result.data) == 0:
             raise HTTPException(status_code=404, detail="Zelle recipient not found")
         return {"message": "Zelle recipient mapping deleted successfully"}
@@ -905,7 +989,8 @@ async def get_user_profile(current_user: dict = Depends(get_user_or_dev_mode)):
         # If DatabaseService is not available, return basic profile
         try:
             from database_service import DatabaseService
-            profile = DatabaseService.get_or_create_user_profile(user_id, current_user.get("email"))
+            token = current_user.get("token")
+            profile = DatabaseService.get_or_create_user_profile(user_id, current_user.get("email"), user_token=token)
             if profile:
                 return profile
         except ImportError:

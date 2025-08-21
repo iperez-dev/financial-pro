@@ -250,16 +250,7 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
-  // Handle scroll to top button visibility
-  useEffect(() => {
-    const handleScroll = () => {
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      setShowScrollTop(scrollTop > 300); // Show button after scrolling 300px
-    };
-
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  // Scroll-to-top visibility is handled by useScrollTop hook
 
   // Close dropdown when clicking outside
   useEffect(() => {

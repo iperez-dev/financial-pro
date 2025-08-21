@@ -26,6 +26,23 @@ else:
     supabase_admin = None
     print("Warning: SUPABASE_SERVICE_KEY not set. Admin operations will not be available.")
 
+def get_user_client(user_token: str) -> Client:
+    """
+    Return a Supabase client that makes PostgREST requests authenticated as the given user,
+    so Row Level Security policies evaluate under that user's context.
+    """
+    client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        # Prefer the explicit API if available
+        client.postgrest.auth(user_token)
+    except Exception:
+        # Fallback: set Authorization header directly
+        try:
+            client.postgrest.headers.update({"Authorization": f"Bearer {user_token}"})
+        except Exception:
+            pass
+    return client
+
 def get_user_id_from_token(token: str) -> str:
     """
     Extract user ID from JWT token
@@ -47,7 +64,8 @@ def verify_user_token(token: str) -> dict:
             return {
                 "id": user.user.id,
                 "email": user.user.email,
-                "verified": True
+                "verified": True,
+                "token": token
             }
         return {"verified": False}
     except Exception as e:

@@ -2,19 +2,23 @@
 Database service functions for Financial Pro
 Replaces JSON file operations with Supabase database operations
 """
-from supabase_client import supabase, supabase_admin
+from supabase_client import supabase, supabase_admin, get_user_client
 from typing import List, Dict, Optional, Any
 import uuid
 import os
 from datetime import datetime
 
-# Use admin client for development to bypass RLS
-def get_client():
-    """Get appropriate Supabase client based on environment"""
+def get_client(user_token: Optional[str] = None):
+    """
+    Return a Supabase client.
+    - If a user_token is provided, return a client authenticated as that user (RLS enforced).
+    - If no token and SUPABASE_SERVICE_KEY exists and ENVIRONMENT is explicitly 'development', return admin client.
+    - Otherwise return the anonymous client.
+    """
+    if user_token:
+        return get_user_client(user_token)
     environment = os.getenv("ENVIRONMENT", "production")
-    # Always use admin client for now to bypass RLS issues
-    # TODO: Implement proper RLS policies that work with authenticated users
-    if supabase_admin:
+    if environment == "development" and supabase_admin is not None:
         return supabase_admin
     return supabase
 
@@ -26,10 +30,10 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def get_categories(user_id: str) -> List[Dict]:
+    def get_categories(user_id: str, user_token: Optional[str] = None) -> List[Dict]:
         """Get all categories for a user"""
         try:
-            client = get_client()
+            client = get_client(user_token)
             result = client.table('categories').select('*').eq('user_id', user_id).execute()
             return result.data
         except Exception as e:
@@ -37,10 +41,10 @@ class DatabaseService:
             return []
     
     @staticmethod
-    def create_category(user_id: str, name: str, keywords: List[str] = None, group_name: str = "Other") -> Dict:
+    def create_category(user_id: str, name: str, keywords: List[str] = None, group_name: str = "Other", user_token: Optional[str] = None) -> Dict:
         """Create a new category"""
         try:
-            client = get_client()
+            client = get_client(user_token)
             category_data = {
                 'user_id': user_id,
                 'name': name,
@@ -55,27 +59,29 @@ class DatabaseService:
             return None
     
     @staticmethod
-    def update_category(user_id: str, category_id: str, updates: Dict) -> Dict:
+    def update_category(user_id: str, category_id: str, updates: Dict, user_token: Optional[str] = None) -> Dict:
         """Update a category"""
         try:
-            result = supabase.table('categories').update(updates).eq('id', category_id).eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            result = client.table('categories').update(updates).eq('id', category_id).eq('user_id', user_id).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error updating category: {e}")
             return None
     
     @staticmethod
-    def delete_category(user_id: str, category_id: str) -> bool:
+    def delete_category(user_id: str, category_id: str, user_token: Optional[str] = None) -> bool:
         """Delete a category"""
         try:
-            result = supabase.table('categories').delete().eq('id', category_id).eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            client.table('categories').delete().eq('id', category_id).eq('user_id', user_id).execute()
             return True
         except Exception as e:
             print(f"Error deleting category: {e}")
             return False
     
     @staticmethod
-    def create_default_categories(user_id: str) -> List[Dict]:
+    def create_default_categories(user_id: str, user_token: Optional[str] = None) -> List[Dict]:
         """Create default categories for a new user"""
         default_categories = [
             # Housing
@@ -103,7 +109,7 @@ class DatabaseService:
         ]
         
         created_categories = []
-        client = get_client()
+        client = get_client(user_token)
         for cat_data in default_categories:
             cat_data['user_id'] = user_id
             cat_data['is_default'] = True
@@ -121,7 +127,7 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def save_transactions(user_id: str, transactions: List[Dict], file_info: Dict = None) -> Dict:
+    def save_transactions(user_id: str, transactions: List[Dict], file_info: Dict = None, user_token: Optional[str] = None) -> Dict:
         """Save transactions to database"""
         try:
             # Prepare transactions for database
@@ -144,7 +150,8 @@ class DatabaseService:
                 db_transactions.append(db_trans)
             
             # Insert transactions (use upsert to handle duplicates)
-            result = supabase.table('transactions').upsert(db_transactions, on_conflict='user_id,transaction_key').execute()
+            client = get_client(user_token)
+            result = client.table('transactions').upsert(db_transactions, on_conflict='user_id,transaction_key').execute()
             
             return {
                 'success': True,
@@ -156,10 +163,11 @@ class DatabaseService:
             return {'success': False, 'error': str(e)}
     
     @staticmethod
-    def get_transactions(user_id: str, limit: int = None) -> List[Dict]:
+    def get_transactions(user_id: str, limit: int = None, user_token: Optional[str] = None) -> List[Dict]:
         """Get transactions for a user"""
         try:
-            query = supabase.table('transactions').select('*').eq('user_id', user_id).order('transaction_date', desc=True)
+            client = get_client(user_token)
+            query = client.table('transactions').select('*').eq('user_id', user_id).order('transaction_date', desc=True)
             if limit:
                 query = query.limit(limit)
             result = query.execute()
@@ -169,13 +177,14 @@ class DatabaseService:
             return []
 
     @staticmethod
-    def update_transaction_category(user_id: str, transaction_key: str, category_name: str) -> bool:
+    def update_transaction_category(user_id: str, transaction_key: str, category_name: str, user_token: Optional[str] = None) -> bool:
         """Persist a transaction's category directly on the transactions table as the source of truth"""
         try:
             # Try to resolve category_id by name (optional)
             category_id = None
             try:
-                cat_result = supabase.table('categories').select('id').eq('user_id', user_id).eq('name', category_name).limit(1).execute()
+                client = get_client(user_token)
+                cat_result = client.table('categories').select('id').eq('user_id', user_id).eq('name', category_name).limit(1).execute()
                 if cat_result.data:
                     category_id = cat_result.data[0]['id']
             except Exception as _:
@@ -191,7 +200,7 @@ class DatabaseService:
                 # If we can't resolve the category id, clear it to avoid stale references
                 update_payload['category_id'] = None
 
-            supabase.table('transactions').update(update_payload) \
+            client.table('transactions').update(update_payload) \
                 .eq('user_id', user_id) \
                 .eq('transaction_key', transaction_key) \
                 .execute()
@@ -205,17 +214,18 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def get_merchant_mappings(user_id: str) -> Dict[str, str]:
+    def get_merchant_mappings(user_id: str, user_token: Optional[str] = None) -> Dict[str, str]:
         """Get merchant mappings for a user"""
         try:
-            result = supabase.table('merchant_mappings').select('merchant_name, category_name').eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            result = client.table('merchant_mappings').select('merchant_name, category_name').eq('user_id', user_id).execute()
             return {mapping['merchant_name']: mapping['category_name'] for mapping in result.data}
         except Exception as e:
             print(f"Error getting merchant mappings: {e}")
             return {}
     
     @staticmethod
-    def save_merchant_mapping(user_id: str, merchant_name: str, category_name: str, category_id: str = None) -> bool:
+    def save_merchant_mapping(user_id: str, merchant_name: str, category_name: str, category_id: str = None, user_token: Optional[str] = None) -> bool:
         """Save a merchant mapping"""
         try:
             mapping_data = {
@@ -224,7 +234,8 @@ class DatabaseService:
                 'category_name': category_name,
                 'category_id': category_id
             }
-            result = supabase.table('merchant_mappings').upsert(mapping_data, on_conflict='user_id,merchant_name').execute()
+            client = get_client(user_token)
+            client.table('merchant_mappings').upsert(mapping_data, on_conflict='user_id,merchant_name').execute()
             return True
         except Exception as e:
             print(f"Error saving merchant mapping: {e}")
@@ -235,17 +246,18 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def get_zelle_recipients(user_id: str) -> Dict[str, str]:
+    def get_zelle_recipients(user_id: str, user_token: Optional[str] = None) -> Dict[str, str]:
         """Get Zelle recipient mappings for a user"""
         try:
-            result = supabase.table('zelle_recipients').select('recipient_name, category_name').eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            result = client.table('zelle_recipients').select('recipient_name, category_name').eq('user_id', user_id).execute()
             return {mapping['recipient_name']: mapping['category_name'] for mapping in result.data}
         except Exception as e:
             print(f"Error getting Zelle recipients: {e}")
             return {}
     
     @staticmethod
-    def save_zelle_recipient(user_id: str, recipient_name: str, category_name: str, category_id: str = None) -> bool:
+    def save_zelle_recipient(user_id: str, recipient_name: str, category_name: str, category_id: str = None, user_token: Optional[str] = None) -> bool:
         """Save a Zelle recipient mapping"""
         try:
             mapping_data = {
@@ -254,14 +266,15 @@ class DatabaseService:
                 'category_name': category_name,
                 'category_id': category_id
             }
-            result = supabase.table('zelle_recipients').upsert(mapping_data, on_conflict='user_id,recipient_name').execute()
+            client = get_client(user_token)
+            client.table('zelle_recipients').upsert(mapping_data, on_conflict='user_id,recipient_name').execute()
             return True
         except Exception as e:
             print(f"Error saving Zelle recipient: {e}")
             return False
     
     @staticmethod
-    def create_default_zelle_recipients(user_id: str) -> bool:
+    def create_default_zelle_recipients(user_id: str, user_token: Optional[str] = None) -> bool:
         """Create default Zelle recipient mappings"""
         default_recipients = [
             {'recipient_name': 'Doris', 'category_name': 'Phone'},
@@ -271,7 +284,8 @@ class DatabaseService:
         for recipient in default_recipients:
             recipient['user_id'] = user_id
             try:
-                supabase.table('zelle_recipients').insert(recipient).execute()
+                client = get_client(user_token)
+                client.table('zelle_recipients').insert(recipient).execute()
             except Exception as e:
                 print(f"Error creating default Zelle recipient {recipient['recipient_name']}: {e}")
         
@@ -282,69 +296,77 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def get_transaction_overrides(user_id: str) -> Dict[str, str]:
+    def get_transaction_overrides(user_id: str, user_token: Optional[str] = None) -> Dict[str, str]:
         """Get transaction overrides for a user"""
         try:
-            result = supabase.table('transaction_overrides').select('transaction_key, category_name').eq('user_id', user_id).execute()
-            return {override['transaction_key']: override['category_name'] for override in result.data}
+            client = get_client(user_token)
+            # Align with schema: new_category_name stores the override target
+            result = client.table('transaction_overrides').select('transaction_key, new_category_name').eq('user_id', user_id).execute()
+            return {override['transaction_key']: override['new_category_name'] for override in result.data}
         except Exception as e:
             print(f"Error getting transaction overrides: {e}")
             return {}
     
     @staticmethod
-    def save_transaction_override(user_id: str, transaction_key: str, category_name: str, category_id: str = None) -> bool:
+    def save_transaction_override(user_id: str, transaction_key: str, category_name: str, category_id: str = None, user_token: Optional[str] = None) -> bool:
         """Save a transaction override"""
         try:
             override_data = {
                 'user_id': user_id,
                 'transaction_key': transaction_key,
-                'category_name': category_name,
-                'category_id': category_id,
+                # Align with schema column names for the new category
+                'new_category_name': category_name,
+                'new_category_id': category_id,
                 'override_reason': 'manual'
             }
-            result = supabase.table('transaction_overrides').upsert(override_data, on_conflict='user_id,transaction_key').execute()
+            client = get_client(user_token)
+            client.table('transaction_overrides').upsert(override_data, on_conflict='user_id,transaction_key').execute()
             return True
         except Exception as e:
             print(f"Error saving transaction override: {e}")
             return False
     
     @staticmethod
-    def clear_all_transaction_overrides(user_id: str) -> bool:
+    def clear_all_transaction_overrides(user_id: str, user_token: Optional[str] = None) -> bool:
         """Clear all transaction overrides for a user"""
         try:
-            result = supabase.table('transaction_overrides').delete().eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            client.table('transaction_overrides').delete().eq('user_id', user_id).execute()
             return True
         except Exception as e:
             print(f"Error clearing transaction overrides: {e}")
             return False
     
     @staticmethod
-    def clear_all_merchant_mappings(user_id: str) -> bool:
+    def clear_all_merchant_mappings(user_id: str, user_token: Optional[str] = None) -> bool:
         """Clear all merchant mappings for a user"""
         try:
-            result = supabase.table('merchant_mappings').delete().eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            client.table('merchant_mappings').delete().eq('user_id', user_id).execute()
             return True
         except Exception as e:
             print(f"Error clearing merchant mappings: {e}")
             return False
     
     @staticmethod
-    def clear_all_zelle_recipients(user_id: str) -> bool:
+    def clear_all_zelle_recipients(user_id: str, user_token: Optional[str] = None) -> bool:
         """Clear all Zelle recipient mappings for a user"""
         try:
-            result = supabase.table('zelle_recipients').delete().eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            client.table('zelle_recipients').delete().eq('user_id', user_id).execute()
             return True
         except Exception as e:
             print(f"Error clearing Zelle recipients: {e}")
             return False
     
     @staticmethod
-    def reset_all_transaction_categories(user_id: str) -> bool:
+    def reset_all_transaction_categories(user_id: str, user_token: Optional[str] = None) -> bool:
         """Reset all transaction categories and status to default values"""
         try:
+            client = get_client(user_token)
             # Update all transactions to reset categories and status
             # Keep income transactions as they are, reset others to 'Other' and 'new'
-            supabase.table('transactions').update({
+            client.table('transactions').update({
                 'category_name': 'Other',
                 'category_id': None,
                 'status': 'new',
@@ -357,10 +379,11 @@ class DatabaseService:
             return False
     
     @staticmethod
-    def delete_all_transactions(user_id: str) -> bool:
+    def delete_all_transactions(user_id: str, user_token: Optional[str] = None) -> bool:
         """Delete all transactions for a user (nuclear option)"""
         try:
-            result = supabase.table('transactions').delete().eq('user_id', user_id).execute()
+            client = get_client(user_token)
+            client.table('transactions').delete().eq('user_id', user_id).execute()
             return True
         except Exception as e:
             print(f"Error deleting all transactions: {e}")
@@ -371,7 +394,7 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def create_business(owner_id: str, business_name: str, business_email: str = None) -> Dict:
+    def create_business(owner_id: str, business_name: str, business_email: str = None, user_token: Optional[str] = None) -> Dict:
         """Create a new business account"""
         try:
             business_data = {
@@ -382,7 +405,8 @@ class DatabaseService:
                 'max_clients': 50,
                 'subscription_tier': 'basic'
             }
-            result = supabase.table('businesses').insert(business_data).execute()
+            client = get_client(user_token)
+            result = client.table('businesses').insert(business_data).execute()
             
             if result.data:
                 business = result.data[0]
@@ -395,27 +419,29 @@ class DatabaseService:
             return None
     
     @staticmethod
-    def get_business_info(owner_id: str) -> Dict:
+    def get_business_info(owner_id: str, user_token: Optional[str] = None) -> Dict:
         """Get business information for owner"""
         try:
-            result = supabase.table('businesses').select('*').eq('owner_id', owner_id).execute()
+            client = get_client(user_token)
+            result = client.table('businesses').select('*').eq('owner_id', owner_id).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error getting business info: {e}")
             return None
     
     @staticmethod
-    def get_business_clients(business_id: str) -> List[Dict]:
+    def get_business_clients(business_id: str, user_token: Optional[str] = None) -> List[Dict]:
         """Get all clients for a business"""
         try:
-            result = supabase.table('business_client_summary').select('*').eq('business_id', business_id).execute()
+            client = get_client(user_token)
+            result = client.table('business_client_summary').select('*').eq('business_id', business_id).execute()
             return result.data
         except Exception as e:
             print(f"Error getting business clients: {e}")
             return []
     
     @staticmethod
-    def add_business_client(business_id: str, client_name: str, client_email: str, client_phone: str = None) -> Dict:
+    def add_business_client(business_id: str, client_name: str, client_email: str, client_phone: str = None, user_token: Optional[str] = None) -> Dict:
         """Add a new client to a business"""
         try:
             # For now, we'll create a placeholder client entry
@@ -428,7 +454,8 @@ class DatabaseService:
                 'client_phone': client_phone,
                 'is_active': False  # Will be activated when user accepts invitation
             }
-            result = supabase.table('business_clients').insert(client_data).execute()
+            client = get_client(user_token)
+            result = client.table('business_clients').insert(client_data).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error adding business client: {e}")
@@ -439,11 +466,12 @@ class DatabaseService:
     # =============================================
     
     @staticmethod
-    def get_or_create_user_profile(user_id: str, email: str = None, user_role: str = 'individual') -> Dict:
+    def get_or_create_user_profile(user_id: str, email: str = None, user_role: str = 'individual', user_token: Optional[str] = None) -> Dict:
         """Get user profile or create if doesn't exist"""
         try:
             # Try to get existing profile
-            result = supabase.table('profiles').select('*').eq('id', user_id).execute()
+            client = get_client(user_token)
+            result = client.table('profiles').select('*').eq('id', user_id).execute()
             
             if result.data:
                 return result.data[0]
@@ -456,13 +484,13 @@ class DatabaseService:
                 'is_active': True,
                 'created_at': datetime.now().isoformat()
             }
-            result = supabase.table('profiles').insert(profile_data).execute()
+            result = client.table('profiles').insert(profile_data).execute()
             
             if result.data:
                 # Create default categories and Zelle recipients for individual users
                 if user_role == 'individual':
-                    DatabaseService.create_default_categories(user_id)
-                    DatabaseService.create_default_zelle_recipients(user_id)
+                    DatabaseService.create_default_categories(user_id, user_token)
+                    DatabaseService.create_default_zelle_recipients(user_id, user_token)
                 return result.data[0]
             
             return None
@@ -471,10 +499,11 @@ class DatabaseService:
             return None
     
     @staticmethod
-    def update_user_profile(user_id: str, updates: Dict) -> Dict:
+    def update_user_profile(user_id: str, updates: Dict, user_token: Optional[str] = None) -> Dict:
         """Update user profile"""
         try:
-            result = supabase.table('profiles').update(updates).eq('id', user_id).execute()
+            client = get_client(user_token)
+            result = client.table('profiles').update(updates).eq('id', user_id).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error updating user profile: {e}")
