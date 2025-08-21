@@ -53,127 +53,53 @@ class CategoryUpdateRequest(BaseModel):
 # Database-based category management
 # Categories are now stored in the database and managed per user
 
-# Database-based category management functions
-def get_categories_for_user(user_id: str):
-    """Get categories from database for a specific user"""
-    try:
+def _categories_legacy(user_id: str) -> List[Dict]:
+    """Fetch categories via DatabaseService and map to legacy response shape used by the frontend."""
+    categories = DatabaseService.get_categories(user_id)
+    if not categories:
+        DatabaseService.create_default_categories(user_id)
         categories = DatabaseService.get_categories(user_id)
-        
-        # If user has no categories, create default categories
-        if not categories:
-            DatabaseService.create_default_categories(user_id)
-            categories = DatabaseService.get_categories(user_id)
-        
-        # Convert database format to legacy format for compatibility
-        legacy_format = []
-        for cat in categories:
-            legacy_format.append({
-                "id": str(cat["id"]),
-                "name": cat["name"],
-                "keywords": cat.get("keywords", []),
-                "group": cat.get("group_name", "Other")
-            })
-        
-        return legacy_format
-    except Exception as e:
-        print(f"Error getting categories for user {user_id}: {e}")
-        return []
+    return [
+        {
+            "id": str(cat.get("id")),
+            "name": cat.get("name"),
+            "keywords": cat.get("keywords", []),
+            "group": cat.get("group_name", "Other"),
+        }
+        for cat in categories or []
+    ]
 
-def get_category_by_name_for_user(user_id: str, category_name: str):
-    """Get category by name for a specific user"""
-    try:
-        categories = get_categories_for_user(user_id)
-        return next((cat for cat in categories if cat['name'] == category_name), None)
-    except Exception as e:
-        print(f"Error getting category by name: {e}")
-        return None
+def _get_transaction_override(user_id: str, transaction_key: str):
+    overrides = DatabaseService.get_transaction_overrides(user_id)
+    if transaction_key in overrides:
+        return {"new_category_name": overrides.get(transaction_key)}
+    return None
 
-def get_transaction_override_for_user(user_id: str, transaction_key: str):
-    """Get transaction override from database for a specific user and transaction"""
-    try:
-        overrides = DatabaseService.get_transaction_overrides(user_id)
-        return {"new_category_name": overrides.get(transaction_key)} if transaction_key in overrides else None
-    except Exception as e:
-        print(f"Error getting transaction override: {e}")
-        return None
-
-def save_transaction_override_for_user(user_id: str, transaction_key: str, category_name: str):
-    """Save transaction override to database for a specific user"""
-    try:
-        # Get category by name to get the category_id
-        categories = get_categories_for_user(user_id)
-        category = next((cat for cat in categories if cat['name'] == category_name), None)
-        
-        if not category:
-            print(f"Category '{category_name}' not found for user {user_id}")
-            return False
-        
-        return DatabaseService.save_transaction_override(
-            user_id, transaction_key, category["id"], category_name
-        )
-    except Exception as e:
-        print(f"Error saving transaction override: {e}")
+def _save_transaction_override(user_id: str, transaction_key: str, category_name: str) -> bool:
+    cats = _categories_legacy(user_id)
+    cat = next((c for c in cats if c["name"] == category_name), None)
+    if not cat:
         return False
+    return DatabaseService.save_transaction_override(user_id, transaction_key, category_name, cat.get("id"))
 
-def get_merchant_mapping_for_user(user_id: str, merchant_name: str):
-    """Get merchant mapping from database for a specific user"""
-    try:
-        mappings = DatabaseService.get_merchant_mappings(user_id)
-        return {"category_name": mappings.get(merchant_name)} if merchant_name in mappings else None
-    except Exception as e:
-        print(f"Error getting merchant mapping: {e}")
-        return None
+def _get_merchant_mapping(user_id: str, merchant_name: str):
+    mappings = DatabaseService.get_merchant_mappings(user_id)
+    if merchant_name in mappings:
+        return {"category_name": mappings.get(merchant_name)}
+    return None
 
-def save_merchant_mapping_for_user(user_id: str, merchant_name: str, category_name: str):
-    """Save merchant mapping to database for a specific user"""
-    try:
-        # Get category by name to get the category_id
-        categories = get_categories_for_user(user_id)
-        category = next((cat for cat in categories if cat['name'] == category_name), None)
-        
-        if not category:
-            print(f"Category '{category_name}' not found for user {user_id}")
-            return False
-        
-        return DatabaseService.save_merchant_mapping(
-            user_id, merchant_name, category["id"], category_name
-        )
-    except Exception as e:
-        print(f"Error saving merchant mapping: {e}")
-        return False
+def _save_merchant_mapping(user_id: str, merchant_name: str, category_name: str) -> bool:
+    cats = _categories_legacy(user_id)
+    cat = next((c for c in cats if c["name"] == category_name), None)
+    return DatabaseService.save_merchant_mapping(user_id, merchant_name, category_name, cat.get("id") if cat else None)
 
-def get_zelle_recipients_for_user(user_id: str):
-    """Get Zelle recipient mappings from database for a specific user"""
-    try:
-        recipients = DatabaseService.get_zelle_recipients(user_id)
-        
-        # Convert to legacy format (dict with recipient_name -> category_name)
-        legacy_format = {}
-        for recipient in recipients:
-            legacy_format[recipient["recipient_name"]] = recipient["category_name"]
-        
-        return legacy_format
-    except Exception as e:
-        print(f"Error getting Zelle recipients: {e}")
-        return {}
+def _get_zelle_map(user_id: str) -> Dict[str, str]:
+    return DatabaseService.get_zelle_recipients(user_id)
 
-def save_zelle_recipient_for_user(user_id: str, recipient_name: str, category_name: str):
-    """Save Zelle recipient mapping to database for a specific user"""
-    try:
-        # Get category by name to get the category_id
-        categories = get_categories_for_user(user_id)
-        category = next((cat for cat in categories if cat['name'] == category_name), None)
-        
-        if not category:
-            print(f"Category '{category_name}' not found for user {user_id}")
-            return False
-        
-        return DatabaseService.save_zelle_recipient(
-            user_id, recipient_name, category["id"], category_name
-        )
-    except Exception as e:
-        print(f"Error saving Zelle recipient: {e}")
-        return False
+def _save_zelle_recipient(user_id: str, recipient_name: str, category_name: str) -> bool:
+    cats = _categories_legacy(user_id)
+    cat = next((c for c in cats if c["name"] == category_name), None)
+    return DatabaseService.save_zelle_recipient(user_id, recipient_name, category_name, cat.get("id") if cat else None)
 
 def extract_zelle_recipient(description: str) -> str:
     """Extract recipient name from Zelle payment description"""
@@ -296,7 +222,7 @@ def categorize_expense(user_id: str, description: str, amount: float = None, dat
     # Check for manual overrides first
     if amount is not None:
         transaction_key = get_transaction_key(description, amount, date)
-        override = get_transaction_override_for_user(user_id, transaction_key)
+        override = _get_transaction_override(user_id, transaction_key)
         if override:
             return override["new_category_name"], 'saved'  # Manual overrides are considered 'saved'
     
@@ -304,7 +230,7 @@ def categorize_expense(user_id: str, description: str, amount: float = None, dat
     if is_zelle_payment(description):
         recipient = extract_zelle_recipient(description)
         if recipient:
-            zelle_mappings = get_zelle_recipients_for_user(user_id)
+            zelle_mappings = _get_zelle_map(user_id)
             if recipient in zelle_mappings:
                 print(f"📱 Zelle payment to {recipient} categorized as {zelle_mappings[recipient]}")
                 return zelle_mappings[recipient], 'saved'  # Zelle recipient matches are 'saved'
@@ -312,11 +238,11 @@ def categorize_expense(user_id: str, description: str, amount: float = None, dat
     # Check for merchant matching (skip for Zelle payments)
     if not is_zelle_payment(description):
         merchant_name = extract_merchant_name(description)
-        merchant_mapping = get_merchant_mapping_for_user(user_id, merchant_name)
+        merchant_mapping = _get_merchant_mapping(user_id, merchant_name)
         if merchant_mapping:
             return merchant_mapping["category_name"], 'saved'  # Merchant matches are 'saved'
     
-    categories = get_categories_for_user(user_id)
+    categories = _categories_legacy(user_id)
     description_lower = description.lower().strip()
     
     # Try keyword matching
@@ -345,7 +271,7 @@ async def debug_endpoint(current_user: dict = Depends(get_user_or_dev_mode)):
         user_id = current_user["id"]
         
         # Get categories using different methods
-        categories_main = get_categories_for_user(user_id)
+        categories_main = _categories_legacy(user_id)
         categories_db = DatabaseService.get_categories(user_id)
         
         return {
@@ -366,7 +292,7 @@ async def get_categories(current_user: dict = Depends(get_user_or_dev_mode)):
     """Get all categories for the current user"""
     try:
         user_id = current_user["id"]
-        categories = get_categories_for_user(user_id)
+        categories = _categories_legacy(user_id)
         return {"categories": categories}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting categories: {str(e)}")
@@ -378,7 +304,7 @@ async def create_category(category: CategoryCreate, current_user: dict = Depends
         user_id = current_user["id"]
         
         # Check if category already exists
-        existing_category = get_category_by_name_for_user(user_id, category.name)
+        existing_category = next((c for c in _categories_legacy(user_id) if c["name"] == category.name), None)
         if existing_category:
             raise HTTPException(status_code=400, detail="Category already exists")
         
@@ -507,7 +433,7 @@ async def update_transaction_category_by_key(transaction_key: str, category_data
         print(f"Extracted category: {category}")
         
         # Save the specific transaction override
-        success = save_transaction_override_for_user(user_id, transaction_key, category)
+        success = _save_transaction_override(user_id, transaction_key, category)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save transaction override")
         
@@ -540,7 +466,7 @@ async def learn_from_transaction(transaction_key: str, request_data: dict, curre
         print(f"Extracted merchant name: {merchant_name}")
         
         # Save merchant mapping
-        success = save_merchant_mapping_for_user(user_id, merchant_name, category)
+        success = _save_merchant_mapping(user_id, merchant_name, category)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save merchant mapping")
         
@@ -777,7 +703,7 @@ async def process_expenses(file: UploadFile = File(...), current_user: dict = De
         
         # Create grouped category summary
         def create_grouped_summary(category_data):
-            categories = get_categories_for_user(current_user["id"])
+            categories = _categories_legacy(current_user["id"])
             category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
             
             # Group categories by their group classification
@@ -1249,7 +1175,7 @@ async def get_zelle_recipients(current_user: dict = Depends(get_user_or_dev_mode
     """Get all Zelle recipient mappings for the current user"""
     try:
         user_id = current_user["id"]
-        recipients = get_zelle_recipients_for_user(user_id)
+        recipients = _get_zelle_map(user_id)
         return {"recipients": recipients}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading Zelle recipients: {str(e)}")
@@ -1265,7 +1191,7 @@ async def add_zelle_recipient(recipient_data: dict, current_user: dict = Depends
         if not recipient_name or not category:
             raise HTTPException(status_code=400, detail="Recipient name and category are required")
         
-        success = save_zelle_recipient_for_user(user_id, recipient_name, category)
+        success = _save_zelle_recipient(user_id, recipient_name, category)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save Zelle recipient mapping")
         

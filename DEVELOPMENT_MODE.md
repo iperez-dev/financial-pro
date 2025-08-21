@@ -11,7 +11,7 @@ Development mode allows you to bypass authentication for faster testing and deve
    ```bash
    # Terminal 1 - Backend
    cd backend
-   python main_supabase.py
+   python main.py
    
    # Terminal 2 - Frontend  
    cd frontend
@@ -47,7 +47,7 @@ Development mode allows you to bypass authentication for faster testing and deve
 **1. Start Development:**
 ```bash
 # Start both servers
-cd backend && python main_supabase.py &
+cd backend && python main.py &
 cd frontend && npm run dev &
 ```
 
