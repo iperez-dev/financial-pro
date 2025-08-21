@@ -43,9 +43,7 @@ class CategoryUpdate(BaseModel):
     keywords: List[str] = None
     group: str = None
 
-class TransactionCategoryUpdate(BaseModel):
-    transaction_id: int
-    category: str
+## Removed legacy TransactionCategoryUpdate model (deprecated ID-based endpoint)
 
 class CategoryUpdateRequest(BaseModel):
     category: str
@@ -391,31 +389,9 @@ async def reset_all_transaction_categories(current_user: dict = Depends(get_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error resetting categories: {str(e)}")
 
-# Transaction category management endpoints
-@app.put("/transactions/category")
-async def update_transaction_category(update: TransactionCategoryUpdate, current_user: dict = Depends(get_user_or_dev_mode)):
-    """Update category for a specific transaction (DB-backed)."""
-    try:
-        user_id = current_user["id"]
-        # The legacy endpoint isn't used by the UI, but wire it to DB to avoid JSON usage
-        success = DatabaseService.update_transaction_category(user_id, str(update.transaction_id), update.category)
-        if not success:
-            raise HTTPException(status_code=400, detail="Failed to update transaction category")
-        return {"message": "Transaction category updated successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating transaction category: {str(e)}")
+# Transaction category management endpoints (standardized on transaction_key)
 
-@app.post("/transactions/{transaction_key}/category")
-async def set_transaction_category(transaction_key: str, category: str, current_user: dict = Depends(get_user_or_dev_mode)):
-    """Set category for a specific transaction using transaction key (DB-backed)."""
-    try:
-        user_id = current_user["id"]
-        success = DatabaseService.update_transaction_category(user_id, transaction_key, category)
-        if not success:
-            raise HTTPException(status_code=400, detail="Failed to set transaction category")
-        return {"message": "Transaction category set successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error setting transaction category: {str(e)}")
+## Removed deprecated POST /transactions/{transaction_key}/category endpoint
 
 @app.put("/transactions/{transaction_key}/category")
 async def update_transaction_category_by_key(transaction_key: str, category_data: CategoryUpdateRequest, current_user: dict = Depends(get_user_or_dev_mode)):

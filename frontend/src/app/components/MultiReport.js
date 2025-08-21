@@ -1,63 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Report from './Report';
-
-// Helper function to format filename (same as in Report.js)
-const formatFilename = (filename) => {
-  if (!filename) return 'Transactions';
-  
-  // Remove file extension
-  const nameWithoutExt = filename.replace(/\.(csv|xlsx|xls)$/i, '');
-  
-  // Handle the specific case: Chase1190_Activity_20250816
-  // Pattern: BankName + Number + _Activity_ + YYYYMMDD
-  const activityMatch = nameWithoutExt.match(/^([A-Za-z]+)(\d+)_Activity_(\d{8})$/);
-  if (activityMatch) {
-    const [, bankName, accountNumber, dateStr] = activityMatch;
-    
-    // Format date from YYYYMMDD to YYYY.MM.DD
-    const year = dateStr.substring(0, 4);
-    const month = dateStr.substring(4, 6);
-    const day = dateStr.substring(6, 8);
-    const formattedDate = `${year}.${month}.${day}`;
-    
-    return `${bankName} ${accountNumber} - Activity (${formattedDate})`;
-  }
-  
-  // Fallback: just replace underscores with spaces and capitalize first letter
-  return nameWithoutExt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-};
-
-const formatCurrency = (amount) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD'
-  }).format(amount);
-};
+import { formatCurrency, formatFilename } from '../../lib/formatters';
+import useScrollTop from '../../lib/useScrollTop';
+import ScrollToTopButton from './ScrollToTopButton';
 
 export default function MultiReport({ data, onRemoveReport }) {
   const { reports, summary, total_files, successful_files } = data;
-  const [showScrollTop, setShowScrollTop] = useState(false);
-
-  // Handle scroll to top button visibility
-  useEffect(() => {
-    const handleScroll = () => {
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      setShowScrollTop(scrollTop > 300); // Show button after scrolling 300px
-    };
-
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  // Scroll to top function
-  const scrollToTop = () => {
-    window.scrollTo({
-      top: 0,
-      behavior: 'smooth'
-    });
-  };
+  const { showScrollTop, scrollToTop } = useScrollTop(300);
 
   // Create file names for summary header
   const successfulReports = reports.filter(report => report.success);
@@ -212,28 +163,7 @@ export default function MultiReport({ data, onRemoveReport }) {
       </div>
 
       {/* Scroll to Top Button */}
-      {showScrollTop && (
-        <button
-          onClick={scrollToTop}
-          className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 z-50"
-          aria-label="Scroll to top"
-        >
-          <svg
-            className="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M5 10l7-7m0 0l7 7m-7-7v18"
-            />
-          </svg>
-        </button>
-      )}
+      {showScrollTop && <ScrollToTopButton onClick={scrollToTop} />}
     </div>
   );
 }

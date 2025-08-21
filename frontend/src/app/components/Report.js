@@ -4,8 +4,11 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle } from '../../lib/api';
+import { formatCurrency, formatFilename } from '../../lib/formatters';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import useScrollTop from '../../lib/useScrollTop';
+import ScrollToTopButton from './ScrollToTopButton';
 
 const COLORS = [
   '#0088FE', '#00C49F', '#FFBB28', '#FF8042', 
@@ -14,31 +17,7 @@ const COLORS = [
   '#64B5F6'
 ];
 
-// Helper function to format filename
-const formatFilename = (filename) => {
-  if (!filename) return 'Transactions';
-  
-  // Remove file extension
-  const nameWithoutExt = filename.replace(/\.(csv|xlsx|xls)$/i, '');
-  
-  // Handle the specific case: Chase1190_Activity_20250816
-  // Pattern: BankName + Number + _Activity_ + YYYYMMDD
-  const activityMatch = nameWithoutExt.match(/^([A-Za-z]+)(\d+)_Activity_(\d{8})$/);
-  if (activityMatch) {
-    const [, bankName, accountNumber, dateStr] = activityMatch;
-    
-    // Format date from YYYYMMDD to YYYY.MM.DD
-    const year = dateStr.substring(0, 4);
-    const month = dateStr.substring(4, 6);
-    const day = dateStr.substring(6, 8);
-    const formattedDate = `${year}.${month}.${day}`;
-    
-    return `${bankName} ${accountNumber} - Activity (${formattedDate})`;
-  }
-  
-  // Fallback: just replace underscores with spaces and capitalize first letter
-  return nameWithoutExt.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-};
+// formatFilename is imported from ../../lib/formatters
 
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
@@ -51,7 +30,7 @@ export default function Report({ data, onDownloadPDF }) {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryKeywords, setNewCategoryKeywords] = useState('');
   const [updateStatus, setUpdateStatus] = useState({}); // { [transactionKey]: 'success' | 'error' | null }
-  const [showScrollTop, setShowScrollTop] = useState(false);
+  const { showScrollTop, scrollToTop } = useScrollTop(300);
   const [openDropdown, setOpenDropdown] = useState(null); // Track which dropdown is open
   const [deleteModal, setDeleteModal] = useState(null); // { categoryId, categoryName } or null
 
@@ -315,13 +294,7 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
-  // Scroll to top function
-  const scrollToTop = () => {
-    window.scrollTo({
-      top: 0,
-      behavior: 'smooth'
-    });
-  };
+  // Scroll to top handled by useScrollTop hook
 
   const updateTransactionCategory = async (transactionKey, newCategory) => {
     try {
@@ -927,12 +900,7 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount);
-  };
+  // formatCurrency and formatFilename imported from shared formatter module
 
   return (
     <div className="w-full max-w-6xl mx-auto">
@@ -1424,28 +1392,7 @@ export default function Report({ data, onDownloadPDF }) {
       )}
 
       {/* Scroll to Top Button */}
-      {showScrollTop && (
-        <button
-          onClick={scrollToTop}
-          className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full shadow-lg transition-all duration-300 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 z-50"
-          aria-label="Scroll to top"
-        >
-          <svg
-            className="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M5 10l7-7m0 0l7 7m-7-7v18"
-            />
-          </svg>
-        </button>
-      )}
+      {showScrollTop && <ScrollToTopButton onClick={scrollToTop} />}
     </div>
   );
 }
