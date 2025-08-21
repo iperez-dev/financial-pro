@@ -3,6 +3,7 @@
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle } from '../../lib/api';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -69,19 +70,13 @@ export default function Report({ data, onDownloadPDF }) {
     if (!deleteModal) return;
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${deleteModal.categoryId}`, {
-        method: 'DELETE',
-        headers: {
-          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        }
-      });
-
-      if (response.ok) {
+      await api.deleteCategory(deleteModal.categoryId);
+      if (true) {
         // Reload categories to reflect the deletion
         await loadCategories();
         console.log(`Category "${deleteModal.categoryName}" deleted successfully`);
       } else {
-        console.error('Failed to delete category:', response.status);
+        console.error('Failed to delete category');
       }
     } catch (err) {
       console.error('Error deleting category:', err);
@@ -240,14 +235,8 @@ export default function Report({ data, onDownloadPDF }) {
   // Reset all transaction categories (call this once to clear old categories)
   const resetAllCategories = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/reset-categories`, {
-        method: 'POST',
-        headers: {
-          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        }
-      });
-
-      if (response.ok) {
+      await resetTransactionCategories();
+      {
         console.log('All transaction categories have been reset');
         
         // Clear the update status state to remove green checkmarks
@@ -276,8 +265,6 @@ export default function Report({ data, onDownloadPDF }) {
         setTimeout(() => {
           window.location.reload();
         }, 1000); // Small delay to let the user see the success message
-      } else {
-        console.error('Failed to reset categories:', response.status);
       }
     } catch (err) {
       console.error('Error resetting categories:', err);
@@ -321,13 +308,8 @@ export default function Report({ data, onDownloadPDF }) {
 
   const loadCategories = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
-        headers: {
-          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        }
-      });
-      const data = await response.json();
-      setCategories(data.categories);
+      const data = await getCategories();
+      setCategories(data.categories || data);
     } catch (err) {
       console.error('Failed to load categories:', err);
     }
@@ -352,19 +334,8 @@ export default function Report({ data, onDownloadPDF }) {
         throw new Error('Transaction not found');
       }
       
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/${encodeURIComponent(transactionKey)}/category`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        },
-        body: JSON.stringify({ category: newCategory }),
-      });
-
-      console.log('Response status:', response.status);
-      
-      if (response.ok) {
-        const result = await response.json();
+      const result = await apiUpdateTxCategory(transactionKey, newCategory);
+      if (result) {
         console.log('Success:', result);
         
         // Learn from this transaction to update similar ones
@@ -410,17 +381,7 @@ export default function Report({ data, onDownloadPDF }) {
           console.log(`📱 Learning Zelle recipient: ${recipient} -> ${category}`);
           
           // Save Zelle recipient mapping
-          const zelleResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/zelle-recipients`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-            },
-            body: JSON.stringify({ 
-              recipient: recipient,
-              category: category 
-            }),
-          });
+          const zelleResponse = await apiSaveZelle(recipient, category);
 
           if (zelleResponse.ok) {
             console.log(`✅ Zelle recipient mapping saved: ${recipient} -> ${category}`);
@@ -446,25 +407,12 @@ export default function Report({ data, onDownloadPDF }) {
         }
       } else {
         // Handle regular merchant learning
-        const learnResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/transactions/${encodeURIComponent(transactionKey)}/learn`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-          },
-          body: JSON.stringify({ 
-            description: description,
-            category: category 
-          }),
-        });
-
-        if (!learnResponse.ok) {
+        const learnResponse = await apiLearn(transactionKey, description, category);
+        if (!learnResponse) {
           console.error('Failed to learn from transaction');
           return;
         }
-
-        const learnResult = await learnResponse.json();
-        console.log('Learning successful:', learnResult);
+        console.log('Learning successful:', learnResponse);
         
         // Extract merchant name for matching similar transactions
         const merchantName = extractMerchantName(description);
@@ -607,19 +555,8 @@ export default function Report({ data, onDownloadPDF }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(getAuthToken ? { Authorization: `Bearer ${getAuthToken()}` } : {})
-        },
-        body: JSON.stringify({
-          name: newCategoryName.trim(),
-          keywords: keywords
-        }),
-      });
-
-      if (response.ok) {
+      const response = await api.createCategory(newCategoryName.trim(), keywords);
+      if (response) {
         // Reload categories
         await loadCategories();
         

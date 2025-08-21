@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import api from '../../lib/api';
 
 export default function CategoryManager({ isOpen, onClose }) {
   const [categories, setCategories] = useState([]);
@@ -19,9 +20,8 @@ export default function CategoryManager({ isOpen, onClose }) {
   const loadCategories = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`);
-      const data = await response.json();
-      setCategories(data.categories);
+      const data = await api.getCategories();
+      setCategories(data.categories || data);
     } catch (err) {
       setError('Failed to load categories');
     } finally {
@@ -40,23 +40,12 @@ export default function CategoryManager({ isOpen, onClose }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: newCategory.name,
-          keywords: keywords
-        }),
-      });
-
-      if (response.ok) {
+      const resp = await api.createCategory(newCategory.name, keywords);
+      if (resp) {
         setNewCategory({ name: '', keywords: '' });
         loadCategories();
       } else {
-        const errorData = await response.json();
-        setError(errorData.detail || 'Failed to create category');
+        setError('Failed to create category');
       }
     } catch (err) {
       setError('Failed to create category');
@@ -73,18 +62,8 @@ export default function CategoryManager({ isOpen, onClose }) {
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${categoryId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: updatedData.name,
-          keywords: keywords
-        }),
-      });
-
-      if (response.ok) {
+      const resp = await api.updateCategory(categoryId, { name: updatedData.name, keywords });
+      if (resp) {
         setEditingCategory(null);
         loadCategories();
       } else {
@@ -102,11 +81,8 @@ export default function CategoryManager({ isOpen, onClose }) {
 
     try {
       setLoading(true);
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/categories/${categoryId}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
+      await api.deleteCategory(categoryId);
+      if (true) {
         loadCategories();
       } else {
         setError('Failed to delete category');
