@@ -1,12 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, forwardRef, useImperativeHandle } from 'react';
 
-export default function FileUpload({ onFileUpload, isLoading, hasExistingReports = false, existingFiles = [] }) {
+const FileUpload = forwardRef(function FileUpload({ onFileUpload, isLoading, hasExistingReports = false, existingFiles = [] }, ref) {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [progress, setProgress] = useState(0);
   const [showToast, setShowToast] = useState(false);
+  const inputRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    open: () => {
+      if (!isLoading && inputRef.current) {
+        inputRef.current.click();
+      }
+    }
+  }));
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -141,6 +150,7 @@ export default function FileUpload({ onFileUpload, isLoading, hasExistingReports
           onChange={handleChange}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           disabled={isLoading}
+          ref={inputRef}
         />
         
         <div className="space-y-4">
@@ -210,4 +220,6 @@ export default function FileUpload({ onFileUpload, isLoading, hasExistingReports
       )}
     </div>
   );
-}
+});
+
+export default FileUpload;

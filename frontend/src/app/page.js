@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
@@ -23,6 +23,7 @@ function FinancialProApp() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [currentPage, setCurrentPage] = useState('reports'); // Default to reports page
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const uploaderRef = useRef(null);
 
   // Load saved reports from localStorage on component mount
   useEffect(() => {
@@ -174,35 +175,17 @@ function FinancialProApp() {
       // Handle both single file (legacy) and multiple files
       const fileArray = Array.isArray(files) ? files : [files];
       
-      // Check for duplicate files
-      const { duplicateFiles, uniqueFiles } = checkForDuplicateFiles(fileArray);
-      
-      // If there are duplicate files, show error and don't proceed
-      if (duplicateFiles.length > 0) {
-        const duplicateMessage = duplicateFiles.length === 1 
-          ? `The file "${duplicateFiles[0]}" has already been uploaded. Please try a different file.`
-          : `The following files have already been uploaded: ${duplicateFiles.join(', ')}. Please try different files.`;
-        
-        setError(duplicateMessage);
-        setIsLoading(false);
-        return;
-      }
-
-      // If no unique files to upload, return
-      if (uniqueFiles.length === 0) {
-        setIsLoading(false);
-        return;
-      }
+      // Duplicate filtering is handled inside FileUpload component
 
       const formData = new FormData();
       
-      // Append unique files to FormData
-      if (uniqueFiles.length === 1) {
+      // Append files to FormData
+      if (fileArray.length === 1) {
         // Single file - use existing endpoint
-        formData.append('file', uniqueFiles[0]);
+        formData.append('file', fileArray[0]);
       } else {
         // Multiple files - use new endpoint
-        uniqueFiles.forEach(file => {
+        fileArray.forEach(file => {
           formData.append('files', file);
         });
       }
@@ -213,8 +196,8 @@ function FinancialProApp() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // Choose endpoint based on number of unique files
-      const endpoint = uniqueFiles.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
+      // Choose endpoint based on number of files
+      const endpoint = fileArray.length === 1 ? 'process-expenses' : 'process-multiple-expenses';
       
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${endpoint}`, {
         method: 'POST',
@@ -231,7 +214,7 @@ function FinancialProApp() {
       
       // Add new reports to existing ones instead of replacing
       let newReports = [];
-      if (uniqueFiles.length === 1) {
+      if (fileArray.length === 1) {
         // Single file response - convert to array format
         newReports = [data];
       } else {
@@ -304,28 +287,12 @@ function FinancialProApp() {
   };
 
   const handleAddMoreReports = () => {
-    // Trigger file input click instead of showing upload area
-    const fileInput = document.getElementById('hidden-file-input');
-    if (fileInput) {
-      fileInput.click();
+    if (uploaderRef.current && typeof uploaderRef.current.open === 'function') {
+      uploaderRef.current.open();
     }
   };
 
-  const checkForDuplicateFiles = (newFiles) => {
-    const existingFilenames = allReports.map(report => report.filename);
-    const duplicateFiles = [];
-    const uniqueFiles = [];
-
-    newFiles.forEach(file => {
-      if (existingFilenames.includes(file.name)) {
-        duplicateFiles.push(file.name);
-      } else {
-        uniqueFiles.push(file);
-      }
-    });
-
-    return { duplicateFiles, uniqueFiles };
-  };
+  // Duplicate checking centralized in FileUpload
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -407,6 +374,7 @@ function FinancialProApp() {
                 {/* File Upload Area - Only show when no reports exist */}
                 {(!reportData && !multiReportData) && (
                   <FileUpload 
+                    ref={uploaderRef}
                     onFileUpload={handleFileUpload} 
                     isLoading={isLoading} 
                     hasExistingReports={allReports.length > 0}
@@ -414,22 +382,7 @@ function FinancialProApp() {
                   />
                 )}
 
-                {/* Hidden file input for Add More Reports button */}
-                <input
-                  id="hidden-file-input"
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  multiple
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files.length > 0) {
-                      const files = Array.from(e.target.files);
-                      handleFileUpload(files);
-                      // Clear the input to allow re-selecting the same file if needed
-                      e.target.value = '';
-                    }
-                  }}
-                  className="hidden"
-                />
+                {/* File input handled inside FileUpload via ref */}
 
                 {/* Show reports if they exist */}
                 {multiReportData ? (
