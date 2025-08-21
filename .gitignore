@@ -1,3 +1,32 @@
+# Python
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+backend/venv/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+
+# Environment files (never commit secrets)
+.env
+**/.env
+backend/.env
+frontend/.env.local
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+logs/
+**/*.log
+
 # Dependencies
 node_modules/
 */node_modules/
