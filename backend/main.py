@@ -473,6 +473,24 @@ async def get_transaction_overrides(current_user: dict = Depends(get_user_or_dev
         print(f"❌ Error getting transaction overrides: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting transaction overrides: {str(e)}")
 
+@app.get("/merchant-mappings")
+async def get_merchant_mappings(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get learned merchant->category mappings for the current user"""
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        print(f"📋 Getting merchant mappings for user: {user_id}")
+        mappings = DatabaseService.get_merchant_mappings(user_id, token)
+        print(f"📋 Found {len(mappings)} merchant mappings")
+
+        return {
+            "mappings": mappings
+        }
+    except Exception as e:
+        print(f"❌ Error getting merchant mappings: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting merchant mappings: {str(e)}")
+
 @app.post("/transactions/reset-categories")
 async def reset_all_transaction_categories(current_user: dict = Depends(get_user_or_dev_mode)):
     """Reset categories and learned data in the database for the current user"""

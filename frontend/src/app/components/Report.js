@@ -3,7 +3,7 @@
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle, migrateCategories, getTransactionOverrides } from '../../lib/api';
+import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle, migrateCategories, getTransactionOverrides, getMerchantMappings } from '../../lib/api';
 import { formatCurrency, formatFilename } from '../../lib/formatters';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -192,7 +192,11 @@ export default function Report({ data, onDownloadPDF }) {
         const overrides = await loadTransactionOverrides();
 
         // Apply overrides to transactions
-        const transactionsWithOverrides = applyOverridesToTransactions(transactionsWithKeys, overrides);
+        let transactionsWithOverrides = applyOverridesToTransactions(transactionsWithKeys, overrides);
+
+        // Apply merchant-based auto-categorization to remaining uncategorized/new ones
+        const merchantMappings = await loadMerchantMappings();
+        transactionsWithOverrides = applyAutoCategorization(transactionsWithOverrides, merchantMappings);
 
         console.log('✅ Setting transactions with overrides applied');
         setTransactions(transactionsWithOverrides);
@@ -339,6 +343,51 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
+  const loadMerchantMappings = async () => {
+    try {
+      console.log('🔄 Loading merchant mappings...');
+      const response = await getMerchantMappings();
+      const mappings = response.mappings || {};
+      console.log('🔄 Loaded merchant mappings:', Object.keys(mappings).length);
+      return mappings;
+    } catch (err) {
+      console.error('❌ Failed to load merchant mappings:', err);
+      return {};
+    }
+  };
+
+  const applyAutoCategorization = (transactions, mappings) => {
+    if (!transactions || transactions.length === 0) return transactions;
+    if (!mappings || Object.keys(mappings).length === 0) return transactions;
+
+    console.log('🧠 Applying auto-categorization based on merchant mappings...');
+    return transactions.map(t => {
+      // Respect saved/manual overrides and income
+      if (t.status === 'saved' || t.status === 'income') return t;
+
+      // Only adjust uncategorized or obviously placeholder categories
+      const isUncategorized = !t.category || t.category === 'Uncategorized' || t.status === 'new';
+      if (!isUncategorized) return t;
+
+      const merchant = extractMerchantName(t.description);
+      let mappedCategory = mappings[merchant];
+
+      // Fallback: match by first token if exact merchant not found
+      if (!mappedCategory && merchant) {
+        const firstToken = merchant.split(' ')[0];
+        if (firstToken) {
+          const matchKey = Object.keys(mappings).find(k => (k?.split(' ')[0] || '') === firstToken);
+          if (matchKey) mappedCategory = mappings[matchKey];
+        }
+      }
+
+      if (mappedCategory) {
+        return { ...t, category: mappedCategory, status: 'saved' };
+      }
+      return t;
+    });
+  };
+
   const applyOverridesToTransactions = (transactions, overrides) => {
     console.log('🔄 Applying overrides to transactions...');
     return transactions.map(transaction => {
@@ -462,12 +511,13 @@ export default function Report({ data, onDownloadPDF }) {
         
         // Extract merchant name for matching similar transactions
         const merchantName = extractMerchantName(description);
+        const merchantFirstToken = merchantName ? merchantName.split(' ')[0] : '';
 
 
         let matchCount = 0;
-        const updatedTransactions = [];
+        const updatedTransactionKeys = [];
         
-        // Update all transactions with similar merchant names (only uncategorized ones for performance)
+        // Update all transactions with similar merchant names (update any 'new' ones regardless of current category)
         setTransactions(prevTransactions =>
           prevTransactions.map(transaction => {
             // Skip Zelle payments for merchant matching
@@ -475,16 +525,17 @@ export default function Report({ data, onDownloadPDF }) {
               return transaction;
             }
 
-            // Only process transactions that don't have categories yet (performance optimization)
-            if (transaction.category && transaction.category !== 'Uncategorized') {
+            // Only skip transactions that are already saved or income
+            if (transaction.status === 'saved' || transaction.status === 'income') {
               return transaction;
             }
 
             const transactionMerchant = extractMerchantName(transaction.description);
+            const transactionFirstToken = transactionMerchant ? transactionMerchant.split(' ')[0] : '';
 
-            if (transactionMerchant === merchantName) {
+            if (transactionMerchant === merchantName || (merchantFirstToken && merchantFirstToken === transactionFirstToken)) {
               matchCount++;
-              updatedTransactions.push(transaction.description);
+              updatedTransactionKeys.push(transaction.transaction_key);
               return {
                 ...transaction,
                 category: category,
@@ -494,6 +545,15 @@ export default function Report({ data, onDownloadPDF }) {
             return transaction;
           })
         );
+
+        // Mark all updated transaction keys as success to show green checkmark
+        if (updatedTransactionKeys.length > 0) {
+          setUpdateStatus(prev => {
+            const next = { ...prev };
+            updatedTransactionKeys.forEach(key => { next[key] = 'success'; });
+            return next;
+          });
+        }
       }
       
     } catch (error) {
