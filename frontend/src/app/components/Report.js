@@ -93,7 +93,7 @@ export default function Report({ data, onDownloadPDF }) {
       'Personal Income': ['Payroll Ivan', 'Payroll Jenny', 'Other Income'],
       'Financial': ['Savings Account', 'Investment (Robinhood)'],
       'Debt': ['Credit Card Jenny', 'Credit Card Ivan', 'Student Loan', 'Car Payments'],
-      'Other Expenses': [],
+      'Other Expenses': ['Additional Expenses'],
       'Business Expenses': ['Software', 'Employees'],
       'Business': ['WBI']
     };

@@ -132,7 +132,7 @@ class DatabaseService:
             {'name': 'Debt - Car Payments', 'keywords': ['car payment', 'auto loan', 'vehicle payment', 'car loan'], 'group_name': 'Debt'},
             
             # EXPENSES - Other
-            {'name': 'Other Expenses', 'keywords': [], 'group_name': 'Other Expenses'},
+            {'name': 'Other Expenses - Additional Expenses', 'keywords': ['additional', 'extra', 'supplemental', 'bonus', 'supplementary'], 'group_name': 'Other Expenses'},
 
             # EXPENSES - Business Expenses
             {'name': 'Business Expenses - Software', 'keywords': ['software', 'saas', 'subscription software', 'adobe', 'microsoft', 'quickbooks', 'xero'], 'group_name': 'Business Expenses'},
