@@ -1,5 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 import pandas as pd
 import io
 from typing import Dict, List, Any, Optional
@@ -18,13 +20,41 @@ from auth_middleware import get_user_or_dev_mode, get_current_user
 app = FastAPI(title="Financial Pro API", version="1.0.0")
 
 # Enable CORS for frontend communication
+# Configure CORS from FRONTEND_URL env (supports comma-separated origins)
+frontend_urls_env = os.getenv("FRONTEND_URL", "http://localhost:3000")
+allowed_origins = [origin.strip() for origin in frontend_urls_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js default port
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Limit upload size using Content-Length (best-effort)
+class MaxUploadSizeMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_upload_size: int):
+        super().__init__(app)
+        self.max_upload_size = max_upload_size
+
+    async def dispatch(self, request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                size = int(content_length)
+                if size > self.max_upload_size:
+                    max_mb = round(self.max_upload_size / (1024 * 1024))
+                    return JSONResponse(
+                        {"detail": f"Request too large. Max allowed is {max_mb} MB."},
+                        status_code=413,
+                    )
+            except Exception:
+                pass
+        return await call_next(request)
+
+max_upload_mb = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))  # default 10 MB
+app.add_middleware(MaxUploadSizeMiddleware, max_upload_size=max_upload_mb * 1024 * 1024)
 
 # Pydantic models for request/response
 class Category(BaseModel):
@@ -74,10 +104,18 @@ def _get_transaction_override(user_id: str, transaction_key: str, user_token: Op
     return None
 
 def _save_transaction_override(user_id: str, transaction_key: str, category_name: str, user_token: Optional[str] = None) -> bool:
+    print(f"🔍 Looking for category: '{category_name}'")
     cats = _get_categories_for_user(user_id, user_token)
+    print(f"📋 Available categories: {[c['name'] for c in cats]}")
+
     cat = next((c for c in cats if c["name"] == category_name), None)
+    print(f"🎯 Found category: {cat}")
+
     if not cat:
+        print(f"❌ Category '{category_name}' not found!")
         return False
+
+    print(f"✅ Saving transaction override: {transaction_key} -> {category_name}")
     return DatabaseService.save_transaction_override(user_id, transaction_key, category_name, cat.get("id"), user_token)
 
 def _get_merchant_mapping(user_id: str, merchant_name: str, user_token: Optional[str] = None):
@@ -397,6 +435,44 @@ async def delete_category(category_id: str, current_user: dict = Depends(get_use
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting category: {str(e)}")
 
+@app.post("/categories/migrate")
+async def migrate_categories_to_new_structure(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Migrate user's categories to the new structure"""
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        result = DatabaseService.migrate_user_categories_to_new_structure(user_id, token)
+
+        if result['success']:
+            return {
+                "message": result['message'],
+                "categories_created": result['categories_created']
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result['error'])
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error migrating categories: {str(e)}")
+
+@app.get("/transaction-overrides")
+async def get_transaction_overrides(current_user: dict = Depends(get_user_or_dev_mode)):
+    """Get all transaction overrides for the current user"""
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        print(f"📋 Getting transaction overrides for user: {user_id}")
+        overrides = DatabaseService.get_transaction_overrides(user_id, token)
+        print(f"📋 Found {len(overrides)} transaction overrides")
+
+        return {
+            "overrides": overrides
+        }
+    except Exception as e:
+        print(f"❌ Error getting transaction overrides: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting transaction overrides: {str(e)}")
+
 @app.post("/transactions/reset-categories")
 async def reset_all_transaction_categories(current_user: dict = Depends(get_user_or_dev_mode)):
     """Reset categories and learned data in the database for the current user"""
@@ -462,7 +538,8 @@ async def learn_from_transaction(transaction_key: str, request_data: dict, curre
         print(f"Extracted merchant name: {merchant_name}")
         
         # Save merchant mapping
-        success = _save_merchant_mapping(user_id, merchant_name, category)
+        user_token = current_user.get("token")
+        success = _save_merchant_mapping(user_id, merchant_name, category, user_token)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save merchant mapping")
         

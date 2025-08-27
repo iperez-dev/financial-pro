@@ -170,16 +170,7 @@ const Sidebar = ({
 
       {/* Footer */}
       <div className="p-4 border-t border-gray-200">
-        {/* Development Mode Indicator */}
-        {typeof window !== 'undefined' && window.localStorage?.getItem('dev-mode') === 'true' && (
-          <div className={`mb-3 ${isCollapsed ? 'flex justify-center' : ''}`}>
-            <span className={`bg-yellow-100 text-yellow-800 text-xs font-medium px-2.5 py-0.5 rounded-full ${
-              isCollapsed ? 'text-center' : ''
-            }`}>
-              {isCollapsed ? '🛠️' : '🛠️ DEV MODE'}
-            </span>
-          </div>
-        )}
+        {/* Development Mode Indicator removed */}
 
         {/* Logout Button */}
         <button

@@ -258,29 +258,7 @@ export default function BusinessAuthForm({ onBack }) {
           </div>
         </form>
 
-        {/* Development Mode */}
-        <div className="mt-6">
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-300" />
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-gray-50 text-gray-500">Development Mode</span>
-            </div>
-          </div>
-          <div className="mt-3 text-center">
-            <button
-              type="button"
-              onClick={() => {
-                window.localStorage.setItem('dev-mode', 'true')
-                window.location.reload()
-              }}
-              className="text-green-600 hover:text-green-500 text-sm"
-            >
-              🛠️ Skip Authentication (Development Mode)
-            </button>
-          </div>
-        </div>
+        {/* Development Mode removed */}
 
         {/* Business Features */}
         <div className="mt-8 p-4 bg-green-50 rounded-lg">

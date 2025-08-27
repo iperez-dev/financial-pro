@@ -3,7 +3,7 @@
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle } from '../../lib/api';
+import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle, migrateCategories, getTransactionOverrides } from '../../lib/api';
 import { formatCurrency, formatFilename } from '../../lib/formatters';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -76,10 +76,10 @@ export default function Report({ data, onDownloadPDF }) {
     // Define the exact order for groups and subcategories
     const groupOrder = [
       // EXPENSES
-      'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 
-      'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses',
-      // INCOME  
-      'Business', 'Jobs', 'Other Income'
+      'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses',
+      'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses', 'Business Expenses',
+      // INCOME
+      'Business', 'Personal Income'
     ];
 
     const subcategoryOrder = {
@@ -90,10 +90,12 @@ export default function Report({ data, onDownloadPDF }) {
       'Child Expenses': ['Childcare', 'College Fund'],
       'Healthcare': ['Doctor Office', 'Pharmacy'],
       'Personal Expenses': ['Allowance Jenny', 'Allowance Ivan', 'Donations', 'Subscriptions'],
+      'Personal Income': ['Payroll Ivan', 'Payroll Jenny', 'Other Income'],
       'Financial': ['Savings Account', 'Investment (Robinhood)'],
       'Debt': ['Credit Card Jenny', 'Credit Card Ivan', 'Student Loan', 'Car Payments'],
-      'Business': ['WBI'],
-      'Jobs': ['Payroll Ivan', 'Payroll Jenny']
+      'Other Expenses': [],
+      'Business Expenses': ['Software', 'Employees'],
+      'Business': ['WBI']
     };
 
     categories.forEach(category => {
@@ -101,19 +103,6 @@ export default function Report({ data, onDownloadPDF }) {
       const nameParts = category.name.split(' - ');
       if (nameParts.length === 2) {
         let [parent, subcategory] = nameParts;
-        
-        // Handle Personal categories - separate by type
-        if (parent === 'Personal') {
-          const isJobCategory = category.name.includes('Payroll');
-          const isOtherIncomeCategory = category.name.includes('Other Income');
-          if (isJobCategory) {
-            parent = 'Jobs';
-          } else if (isOtherIncomeCategory) {
-            parent = 'Other Income';
-          } else {
-            parent = 'Personal Expenses';
-          }
-        }
         
         if (!groups[parent]) {
           groups[parent] = [];
@@ -125,6 +114,7 @@ export default function Report({ data, onDownloadPDF }) {
       } else {
         // Handle categories without parent (like "Other Expenses")
         const parent = category.name;
+        console.log(`  📂 Standalone category: "${parent}"`);
         if (!groups[parent]) {
           groups[parent] = [];
         }
@@ -134,6 +124,9 @@ export default function Report({ data, onDownloadPDF }) {
         });
       }
     });
+    
+    console.log('📋 Final groups:', Object.keys(groups));
+    console.log('📋 Groups detail:', groups);
 
     // Sort groups according to custom order and subcategories according to their custom order
     const sortedGroups = {};
@@ -169,47 +162,76 @@ export default function Report({ data, onDownloadPDF }) {
 
   // Initialize transactions state when data changes
   useEffect(() => {
-    if (data.transactions) {
-      console.log('Received transactions:', data.transactions.slice(0, 2)); // Log first 2 transactions
-      
-      // Add fallback transaction keys and status if missing
-      const transactionsWithKeys = data.transactions.map((transaction, index) => {
-        let updatedTransaction = { ...transaction };
-        
-        // Add fallback transaction key if missing
-        if (!transaction.transaction_key) {
-          const cleanDesc = transaction.description.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-          const fallbackKey = `${cleanDesc || 'transaction'}_${Math.abs(transaction.amount).toString().replace('.', '')}_${index}`;
-          console.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
-          updatedTransaction.transaction_key = fallbackKey;
-        }
-        
-        // Add fallback status if missing
-        if (!transaction.status) {
-          console.warn(`Missing status for transaction ${index}, using fallback: 'new'`);
-          updatedTransaction.status = 'new';
-        }
-        
-        return updatedTransaction;
-      });
-      
-      setTransactions(transactionsWithKeys);
-      
-      // Initialize status for transactions that already have saved categories
-      const initialStatus = {};
-      transactionsWithKeys.forEach(transaction => {
-        if (transaction.status === 'saved') {
-          initialStatus[transaction.transaction_key] = 'success';
-        }
-      });
-      setUpdateStatus(initialStatus);
-    }
+    const loadTransactionsWithOverrides = async () => {
+      if (data.transactions) {
+        console.log('Received transactions:', data.transactions.slice(0, 2)); // Log first 2 transactions
+
+        // Add fallback transaction keys and status if missing
+        const transactionsWithKeys = data.transactions.map((transaction, index) => {
+          let updatedTransaction = { ...transaction };
+
+          // Add fallback transaction key if missing
+          if (!transaction.transaction_key) {
+            const cleanDesc = transaction.description.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
+            const fallbackKey = `${cleanDesc || 'transaction'}_${Math.abs(transaction.amount).toString().replace('.', '')}_${index}`;
+            console.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
+            updatedTransaction.transaction_key = fallbackKey;
+          }
+
+          // Add fallback status if missing
+          if (!transaction.status) {
+            console.warn(`Missing status for transaction ${index}, using fallback: 'new'`);
+            updatedTransaction.status = 'new';
+          }
+
+          return updatedTransaction;
+        });
+
+        // Load transaction overrides from the database
+        console.log('🔄 Loading overrides for transactions...');
+        const overrides = await loadTransactionOverrides();
+
+        // Apply overrides to transactions
+        const transactionsWithOverrides = applyOverridesToTransactions(transactionsWithKeys, overrides);
+
+        console.log('✅ Setting transactions with overrides applied');
+        setTransactions(transactionsWithOverrides);
+
+        // Initialize status for transactions that already have saved categories
+        const initialStatus = {};
+        transactionsWithOverrides.forEach(transaction => {
+          if (transaction.status === 'saved') {
+            initialStatus[transaction.transaction_key] = 'success';
+          }
+        });
+        setUpdateStatus(initialStatus);
+      }
+    };
+
+    loadTransactionsWithOverrides();
   }, [data]);
 
   // Load categories for the dropdown
   useEffect(() => {
     loadCategories();
   }, []);
+
+  // Migrate categories to new structure
+  const migrateToNewCategories = async () => {
+    try {
+      console.log('🔄 Migrating categories to new structure...');
+      const result = await migrateCategories();
+      console.log('✅ Migration result:', result);
+      
+      // Reload categories after migration
+      await loadCategories();
+      
+      alert(`Migration successful! ${result.categories_created} categories created.`);
+    } catch (err) {
+      console.error('❌ Migration failed:', err);
+      alert('Migration failed. Please check the console for details.');
+    }
+  };
 
   // Reset all transaction categories (call this once to clear old categories)
   const resetAllCategories = async () => {
@@ -267,65 +289,125 @@ export default function Report({ data, onDownloadPDF }) {
   // Handle escape key to close modal
   useEffect(() => {
     const handleEscapeKey = (event) => {
-      if (event.key === 'Escape' && deleteModal) {
+      if (event.key === 'Escape') {
         setDeleteModal(null);
+        setOpenDropdown(null);
+      }
+    };
+
+    const handleClickOutside = (event) => {
+      if (openDropdown && !event.target.closest('.category-dropdown')) {
+        setOpenDropdown(null);
       }
     };
 
     document.addEventListener('keydown', handleEscapeKey);
-    return () => document.removeEventListener('keydown', handleEscapeKey);
-  }, [deleteModal]);
+    document.addEventListener('click', handleClickOutside);
+
+    return () => {
+      document.removeEventListener('keydown', handleEscapeKey);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [deleteModal, openDropdown]);
 
   const loadCategories = async () => {
     try {
+      console.log('📂 Loading categories...');
       const data = await getCategories();
-      setCategories(data.categories || data);
+      const categoriesArray = data.categories || data;
+      console.log('📂 Loaded categories:', categoriesArray.length, 'categories');
+      console.log('📂 Category names:', categoriesArray.map(c => c.name));
+
+      setCategories(categoriesArray);
+      console.log('✅ Categories loaded successfully');
     } catch (err) {
-      console.error('Failed to load categories:', err);
+      console.error('❌ Failed to load categories:', err);
     }
+  };
+
+  const loadTransactionOverrides = async () => {
+    try {
+      console.log('🔄 Loading transaction overrides...');
+      const response = await getTransactionOverrides();
+      const overrides = response.overrides || {};
+      console.log('🔄 Loaded overrides:', Object.keys(overrides).length, 'overrides');
+
+      return overrides;
+    } catch (err) {
+      console.error('❌ Failed to load transaction overrides:', err);
+      return {};
+    }
+  };
+
+  const applyOverridesToTransactions = (transactions, overrides) => {
+    console.log('🔄 Applying overrides to transactions...');
+    return transactions.map(transaction => {
+      const overrideCategory = overrides[transaction.transaction_key];
+      if (overrideCategory) {
+        console.log(`✅ Applying override: ${transaction.transaction_key} -> ${overrideCategory}`);
+        return {
+          ...transaction,
+          category: overrideCategory,
+          status: 'saved'
+        };
+      }
+      return transaction;
+    });
   };
 
   // Scroll to top handled by useScrollTop hook
 
   const updateTransactionCategory = async (transactionKey, newCategory) => {
     try {
-      console.log('Updating transaction:', { transactionKey, newCategory });
+      console.log('🔄 Starting category update:', { transactionKey, newCategory });
       setUpdatingTransaction(transactionKey);
-      
+
       // Find the current transaction to get its description
       const currentTransaction = transactions.find(t => t.transaction_key === transactionKey);
+      console.log('📋 Found transaction:', currentTransaction);
       if (!currentTransaction) {
         throw new Error('Transaction not found');
       }
-      
+
+      console.log('📡 Making API call to update category...');
       const result = await apiUpdateTxCategory(transactionKey, newCategory);
+      console.log('📡 API response:', result);
+
       if (result) {
-        console.log('Success:', result);
-        
+        console.log('✅ API call successful, result:', result);
+
+        // Update the transaction state immediately
+        console.log('🔄 Updating transaction state...');
+        setTransactions(prev => {
+          const updated = prev.map(t =>
+            t.transaction_key === transactionKey
+              ? { ...t, category: newCategory, status: 'saved' }
+              : t
+          );
+          console.log('📋 Updated transaction in state:', updated.find(t => t.transaction_key === transactionKey));
+          return updated;
+        });
+
         // Learn from this transaction to update similar ones
         if (result.learned_merchant) {
+          console.log('🧠 Learning from transaction...');
           await learnFromTransaction(transactionKey, currentTransaction.description, newCategory);
         } else {
-          // Just update the current transaction if no learning occurred
-          setTransactions(prev => 
-            prev.map(t => 
-              t.transaction_key === transactionKey 
-                ? { ...t, category: newCategory, status: 'saved' }
-                : t
-            )
-          );
+          console.log('ℹ️ No merchant learning needed');
         }
-        
+
+        console.log('✅ Category update completed successfully');
         showUpdateStatus(transactionKey, 'success');
       } else {
-        const errorData = await response.text();
-        console.error('Failed to update transaction category:', response.status, errorData);
+        console.error('❌ API returned no result');
         showUpdateStatus(transactionKey, 'error');
       }
     } catch (err) {
-      console.error('Error updating transaction category:', err);
+      console.error('❌ Error updating transaction category:', err);
+      console.error('❌ Error details:', err.message, err.stack);
       showUpdateStatus(transactionKey, 'error');
     } finally {
+      console.log('🔚 Cleaning up update state');
       setUpdatingTransaction(null);
     }
   };
@@ -376,33 +458,35 @@ export default function Report({ data, onDownloadPDF }) {
           console.error('Failed to learn from transaction');
           return;
         }
-        console.log('Learning successful:', learnResponse);
+
         
         // Extract merchant name for matching similar transactions
         const merchantName = extractMerchantName(description);
-        console.log(`Extracted merchant from "${description}": "${merchantName}"`);
-        
-        // Debug: Check all transactions for matches
+
+
         let matchCount = 0;
         const updatedTransactions = [];
         
-        // Update all transactions with similar merchant names
-        setTransactions(prevTransactions => 
+        // Update all transactions with similar merchant names (only uncategorized ones for performance)
+        setTransactions(prevTransactions =>
           prevTransactions.map(transaction => {
             // Skip Zelle payments for merchant matching
             if (isZellePayment(transaction.description)) {
               return transaction;
             }
-            
+
+            // Only process transactions that don't have categories yet (performance optimization)
+            if (transaction.category && transaction.category !== 'Uncategorized') {
+              return transaction;
+            }
+
             const transactionMerchant = extractMerchantName(transaction.description);
-            console.log(`Comparing "${transactionMerchant}" with "${merchantName}" for transaction: ${transaction.description}`);
-            
+
             if (transactionMerchant === merchantName) {
               matchCount++;
-              console.log(`✅ MATCH FOUND! Updating transaction: ${transaction.description}`);
               updatedTransactions.push(transaction.description);
-              return { 
-                ...transaction, 
+              return {
+                ...transaction,
                 category: category,
                 status: 'saved'  // Mark as saved since it's now learned
               };
@@ -410,9 +494,6 @@ export default function Report({ data, onDownloadPDF }) {
             return transaction;
           })
         );
-        
-        console.log(`Total matches found: ${matchCount}`);
-        console.log(`Updated transactions:`, updatedTransactions);
       }
       
     } catch (error) {
@@ -420,47 +501,45 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
+  // Cache for merchant extraction to avoid repeated processing
+  const merchantCache = new Map();
+
   // Helper function to extract merchant name (simplified version of backend logic)
   const extractMerchantName = (description) => {
     if (!description) return '';
-    
-    console.log(`🔍 Extracting merchant from: "${description}"`);
-    
+
+    // Check cache first
+    if (merchantCache.has(description)) {
+      return merchantCache.get(description);
+    }
+
     let desc = description.trim().toUpperCase();
-    console.log(`Step 1 - Uppercase: "${desc}"`);
-    
+
     // Remove dates (MM/DD patterns)
     desc = desc.replace(/\b\d{1,2}\/\d{1,2}\b/g, '');
     desc = desc.replace(/\b\d{2}\/\d{2}\/\d{2,4}\b/g, '');
-    console.log(`Step 2 - Remove dates: "${desc}"`);
-    
+
     // Remove card numbers and reference numbers (6+ digits)
     desc = desc.replace(/\b\d{6,}\b/g, '');
-    console.log(`Step 3 - Remove long numbers: "${desc}"`);
-    
+
     // Remove common state suffixes
     desc = desc.replace(/\s+(FL|CA|NY|TX|GA|NC|SC|VA|MD|PA|NJ|CT|MA|OH|MI|IL|IN|WI|MN|IA|MO|AR|LA|MS|AL|TN|KY|WV|DE|DC|WA)\s*$/g, '');
-    console.log(`Step 4 - Remove states: "${desc}"`);
-    
+
     // Remove store numbers and location codes (improved patterns)
     desc = desc.replace(/\s*#\d+\s*/g, ' ');  // Remove #03, #05 patterns
     desc = desc.replace(/\s+\d{3,6}\s*/g, ' ');  // Remove 03655, 05924 patterns (not just at end)
-    console.log(`Step 5 - Remove store numbers: "${desc}"`);
-    
+
     // Remove Amazon transaction IDs and similar patterns
     desc = desc.replace(/\*[A-Z0-9]{6,}/g, '');  // Remove *LH1XA4I, *0Q6L99D, *AB9Q32ZG3
     desc = desc.replace(/MKTPL\*[A-Z0-9]+/g, 'MKTPL');  // Simplify AMAZON MKTPL*XXX to AMAZON MKTPL
-    console.log(`Step 6 - Remove transaction IDs: "${desc}"`);
-    
+
     // Remove common suffixes that aren't merchant names
     desc = desc.replace(/\s+AMZN\.COM\/BILL.*$/g, '');  // Remove Amzn.com/bill WA
     desc = desc.replace(/\s+MIAMI.*$/g, '');  // Remove MIAMI and everything after
-    console.log(`Step 7 - Remove common suffixes: "${desc}"`);
-    
+
     // Clean up extra spaces
     desc = desc.replace(/\s+/g, ' ').trim();
-    console.log(`Step 8 - Clean spaces: "${desc}"`);
-    
+
     // Special handling for known merchant patterns
     let merchant;
     if (desc.includes('CVS') && desc.includes('PHARMACY')) {
@@ -479,9 +558,13 @@ export default function Report({ data, onDownloadPDF }) {
         merchant = desc;
       }
     }
-    
-    console.log(`Final merchant name: "${merchant}"`);
-    return merchant.trim();
+
+    const finalMerchant = merchant.trim();
+
+    // Cache the result
+    merchantCache.set(description, finalMerchant);
+
+    return finalMerchant;
   };
 
   // Helper functions for Zelle payments
@@ -492,7 +575,7 @@ export default function Report({ data, onDownloadPDF }) {
   const extractZelleRecipient = (description) => {
     if (!isZellePayment(description)) return null;
     
-    console.log(`🔍 Extracting Zelle recipient from: "${description}"`);
+
     
     // Extract recipient name - pattern: "Zelle payment to [Name] [phone/numbers]"
     const match = description.match(/zelle payment to\s+([^0-9]+)/i);
@@ -542,12 +625,20 @@ export default function Report({ data, onDownloadPDF }) {
   };
 
   const handleCategoryChange = (transactionKey, value) => {
+    console.log('🎯 Category change requested:', { transactionKey, value });
+    console.log('🎯 Category value type:', typeof value);
+    console.log('🎯 Category value length:', value.length);
+
     if (value === '__NEW_CATEGORY__') {
+      console.log('📝 Opening new category form');
       setShowNewCategoryForm(transactionKey);
     } else {
-      updateTransactionCategory(transactionKey, value);
+      console.log('🔄 Updating category to:', value);
+      console.log('🔄 Category value trimmed:', value.trim());
+      updateTransactionCategory(transactionKey, value.trim());
     }
-    };
+    setOpenDropdown(null); // Close dropdown after selection
+  };
 
   const handleDownloadPDF = async () => {
     try {
@@ -899,6 +990,16 @@ export default function Report({ data, onDownloadPDF }) {
         <h2 className="text-3xl font-bold text-gray-900">Expense Report</h2>
         <div className="flex items-center space-x-3">
           <button
+            onClick={migrateToNewCategories}
+            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
+            title="Migrate to new category structure"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            <span>Migrate Categories</span>
+          </button>
+          <button
             onClick={resetAllCategories}
             className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
             title="Clear all saved category assignments but keep transactions"
@@ -1080,9 +1181,14 @@ export default function Report({ data, onDownloadPDF }) {
                         </div>
                       ) : (
                         <div className="flex items-center space-x-2">
-                          <div className="relative">
+                          <div className="relative category-dropdown">
                             <button
-                              onClick={() => setOpenDropdown(openDropdown === transaction.transaction_key ? null : transaction.transaction_key)}
+                              onClick={() => {
+                                console.log('Dropdown button clicked for transaction:', transaction.transaction_key);
+                                const newState = openDropdown === transaction.transaction_key ? null : transaction.transaction_key;
+                                console.log('Setting dropdown state to:', newState);
+                                setOpenDropdown(newState);
+                              }}
                               disabled={updatingTransaction === transaction.transaction_key || transaction.status === 'income'}
                               className={`text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[320px] text-left flex items-center justify-between ${
                                 transaction.status === 'income'
@@ -1099,7 +1205,7 @@ export default function Report({ data, onDownloadPDF }) {
                             </button>
                             
                             {openDropdown === transaction.transaction_key && (
-                              <div className="absolute z-10 mt-1 w-full min-w-[320px] bg-white border border-gray-300 rounded shadow-lg max-h-80 overflow-y-auto">
+                              <div className="absolute z-50 mt-1 w-full min-w-[320px] bg-white border border-gray-300 rounded shadow-lg max-h-80 overflow-y-auto">
                                 <div
                                   onClick={() => {
                                     handleCategoryChange(transaction.transaction_key, '__NEW_CATEGORY__');
@@ -1111,8 +1217,9 @@ export default function Report({ data, onDownloadPDF }) {
                                 </div>
                                 {(() => {
                                   const organizedCategories = organizeCategories(categories);
-                                  const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses'];
-                                  const incomeGroups = ['Business', 'Jobs', 'Other Income'];
+                                  const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses', 'Business Expenses'];
+                                  const incomeGroups = ['Business', 'Personal Income'];
+
                                   
                                   const renderSection = (sectionName, groupNames) => (
                                     <div key={sectionName}>
@@ -1132,7 +1239,9 @@ export default function Report({ data, onDownloadPDF }) {
                                                 className="flex items-center justify-between px-2 py-1 hover:bg-gray-100 cursor-pointer text-xs font-semibold text-gray-700 bg-gray-50 border-b border-gray-100"
                                               >
                                                 <span
-                                                  onClick={() => {
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    console.log('Clicked standalone category:', groupCategories[0].name);
                                                     handleCategoryChange(transaction.transaction_key, groupCategories[0].name);
                                                     setOpenDropdown(null);
                                                   }}
@@ -1167,7 +1276,9 @@ export default function Report({ data, onDownloadPDF }) {
                                                     className="flex items-center justify-between pl-6 pr-2 py-1 hover:bg-gray-100 cursor-pointer text-xs"
                                                   >
                                                     <span
-                                                      onClick={() => {
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        console.log('Clicked subcategory:', cat.name);
                                                         handleCategoryChange(transaction.transaction_key, cat.name);
                                                         setOpenDropdown(null);
                                                       }}
@@ -1207,9 +1318,6 @@ export default function Report({ data, onDownloadPDF }) {
                               </div>
                             )}
                           </div>
-                          {updatingTransaction === transaction.transaction_key && (
-                            <span className="ml-2 text-xs text-gray-500">Saving...</span>
-                          )}
                           {updateStatus[transaction.transaction_key] && (
                             <span className="ml-2">
                               {updateStatus[transaction.transaction_key] === 'success' ? (

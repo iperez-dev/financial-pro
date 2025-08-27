@@ -22,41 +22,6 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Check for development mode bypass
-    const checkDevMode = () => {
-      const devMode = window.localStorage.getItem('dev-mode')
-      if (devMode === 'true') {
-        // Create mock user for development
-        const mockUser = {
-          id: 'dev-user-123',
-          email: 'dev@example.com',
-          user_metadata: { full_name: 'Development User' }
-        }
-        const mockSession = {
-          user: mockUser,
-          access_token: 'dev-token-123'
-        }
-        const mockProfile = {
-          id: 'dev-user-123',
-          email: 'dev@example.com',
-          full_name: 'Development User',
-          user_role: 'individual',
-          business_id: null,
-          is_active: true
-        }
-        setUser(mockUser)
-        setSession(mockSession)
-        setUserProfile(mockProfile)
-        setLoading(false)
-        return true
-      }
-      return false
-    }
-
-    // If dev mode is active, skip real authentication
-    if (checkDevMode()) {
-      return
-    }
 
     // Get initial session
     const getInitialSession = async () => {

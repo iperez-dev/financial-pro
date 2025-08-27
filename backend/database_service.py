@@ -12,14 +12,12 @@ def get_client(user_token: Optional[str] = None):
     """
     Return a Supabase client.
     - If a user_token is provided, return a client authenticated as that user (RLS enforced).
-    - If no token and SUPABASE_SERVICE_KEY exists and ENVIRONMENT is explicitly 'development', return admin client.
+    - If no token, return the anonymous client.
+    - Admin client should be used only by explicit, restricted server tasks (not via this helper).
     - Otherwise return the anonymous client.
     """
     if user_token:
         return get_user_client(user_token)
-    environment = os.getenv("ENVIRONMENT", "production")
-    if environment == "development" and supabase_admin is not None:
-        return supabase_admin
     return supabase
 
 class DatabaseService:
@@ -82,30 +80,71 @@ class DatabaseService:
     
     @staticmethod
     def create_default_categories(user_id: str, user_token: Optional[str] = None) -> List[Dict]:
-        """Create default categories for a new user"""
+        """Create default categories for a new user with complete structure"""
         default_categories = [
-            # Housing
-            {'name': 'Mortgage', 'keywords': ['mortgage', 'home loan', 'principal', 'interest'], 'group_name': 'Housing'},
-            {'name': 'HOA', 'keywords': ['hoa', 'homeowners association', 'association'], 'group_name': 'Housing'},
+            # EXPENSES - Housing
+            {'name': 'Housing - Mortgage', 'keywords': ['mortgage', 'home loan', 'principal', 'interest'], 'group_name': 'Housing'},
+            {'name': 'Housing - HOA Fee', 'keywords': ['hoa', 'homeowners association', 'association fee', 'community fee'], 'group_name': 'Housing'},
+            {'name': 'Housing - Property Taxes', 'keywords': ['property tax', 'real estate tax', 'county tax', 'tax collector'], 'group_name': 'Housing'},
+            {'name': 'Housing - Home Insurance', 'keywords': ['home insurance', 'homeowners insurance', 'property insurance'], 'group_name': 'Housing'},
+            {'name': 'Housing - Home Repairs', 'keywords': ['home repair', 'maintenance', 'contractor', 'plumber', 'electrician', 'hvac'], 'group_name': 'Housing'},
             
-            # Utilities
-            {'name': 'City Gas', 'keywords': ['city gas', 'gas company', 'natural gas'], 'group_name': 'Utilities'},
-            {'name': 'FPL', 'keywords': ['fpl', 'florida power', 'electric', 'electricity'], 'group_name': 'Utilities'},
-            {'name': 'Internet', 'keywords': ['internet', 'wifi', 'broadband', 'comcast', 'xfinity'], 'group_name': 'Utilities'},
-            {'name': 'Phone', 'keywords': ['phone', 'mobile', 'cell', 'verizon', 'att', 't-mobile'], 'group_name': 'Utilities'},
+            # EXPENSES - Utilities
+            {'name': 'Utilities - City Gas', 'keywords': ['city gas', 'gas company', 'natural gas', 'gas utility'], 'group_name': 'Utilities'},
+            {'name': 'Utilities - FPL', 'keywords': ['fpl', 'florida power', 'electric', 'electricity', 'power company'], 'group_name': 'Utilities'},
+            {'name': 'Utilities - Water and Sewer', 'keywords': ['water', 'sewer', 'water utility', 'water department'], 'group_name': 'Utilities'},
+            {'name': 'Utilities - Internet', 'keywords': ['internet', 'wifi', 'broadband', 'comcast', 'xfinity', 'spectrum'], 'group_name': 'Utilities'},
+            {'name': 'Utilities - Phone', 'keywords': ['phone', 'mobile', 'cell', 'verizon', 'att', 't-mobile', 'sprint'], 'group_name': 'Utilities'},
             
-            # Transportation
-            {'name': 'Toll', 'keywords': ['toll', 'turnpike', 'sunpass', 'ezpass'], 'group_name': 'Transportation'},
-            {'name': 'Gas Station', 'keywords': ['gas', 'fuel', 'shell', 'bp', 'exxon', 'chevron'], 'group_name': 'Transportation'},
-            {'name': 'Car Insurance', 'keywords': ['car insurance', 'auto insurance', 'geico', 'progressive'], 'group_name': 'Transportation'},
+            # EXPENSES - Transportation
+            {'name': 'Transportation - Car Insurance', 'keywords': ['car insurance', 'auto insurance', 'geico', 'progressive', 'state farm'], 'group_name': 'Transportation'},
+            {'name': 'Transportation - Car Repairs', 'keywords': ['car repair', 'auto repair', 'mechanic', 'service', 'maintenance'], 'group_name': 'Transportation'},
+            {'name': 'Transportation - Fuel', 'keywords': ['gas', 'fuel', 'shell', 'bp', 'exxon', 'chevron', 'gasoline', 'gas station'], 'group_name': 'Transportation'},
+            {'name': 'Transportation - Tolls', 'keywords': ['toll', 'turnpike', 'sunpass', 'ezpass', 'toll road'], 'group_name': 'Transportation'},
             
-            # Financial
-            {'name': 'Student Loan', 'keywords': ['student loan', 'education loan', 'navient', 'sallie mae'], 'group_name': 'Financial'},
-            {'name': 'Credit Card Jenny', 'keywords': ['jenny credit', 'jenny card'], 'group_name': 'Financial'},
-            {'name': 'Credit Card Ivan', 'keywords': ['ivan credit', 'ivan card'], 'group_name': 'Financial'},
+            # EXPENSES - Shopping & Food
+            {'name': 'Shopping & Food - Groceries', 'keywords': ['grocery', 'supermarket', 'walmart', 'target', 'publix', 'kroger', 'food'], 'group_name': 'Shopping & Food'},
+            {'name': 'Shopping & Food - Dining Out', 'keywords': ['restaurant', 'dining', 'food delivery', 'takeout', 'uber eats', 'doordash', 'grubhub'], 'group_name': 'Shopping & Food'},
+            {'name': 'Shopping & Food - Amazon', 'keywords': ['amazon', 'amzn', 'amazon.com', 'amazon prime'], 'group_name': 'Shopping & Food'},
             
-            # Personal
-            {'name': 'ChildCare', 'keywords': ['childcare', 'daycare', 'babysitter', 'nanny'], 'group_name': 'Personal'},
+            # EXPENSES - Child Expenses
+            {'name': 'Child Expenses - Childcare', 'keywords': ['childcare', 'daycare', 'babysitter', 'nanny', 'child care'], 'group_name': 'Child Expenses'},
+            {'name': 'Child Expenses - College Fund', 'keywords': ['college fund', '529', 'education savings', 'college savings'], 'group_name': 'Child Expenses'},
+            
+            # EXPENSES - Healthcare
+            {'name': 'Healthcare - Doctor Office', 'keywords': ['doctor', 'medical', 'physician', 'clinic', 'hospital', 'health'], 'group_name': 'Healthcare'},
+            {'name': 'Healthcare - Pharmacy', 'keywords': ['pharmacy', 'cvs', 'walgreens', 'prescription', 'medication'], 'group_name': 'Healthcare'},
+            
+            # EXPENSES - Personal Expenses
+            {'name': 'Personal Expenses - Allowance Jenny', 'keywords': ['allowance jenny', 'jenny allowance'], 'group_name': 'Personal Expenses'},
+            {'name': 'Personal Expenses - Allowance Ivan', 'keywords': ['allowance ivan', 'ivan allowance'], 'group_name': 'Personal Expenses'},
+            {'name': 'Personal Expenses - Donations', 'keywords': ['donation', 'charity', 'church', 'nonprofit', 'giving'], 'group_name': 'Personal Expenses'},
+            {'name': 'Personal Expenses - Subscriptions', 'keywords': ['subscription', 'netflix', 'spotify', 'streaming', 'monthly service'], 'group_name': 'Personal Expenses'},
+            
+            # EXPENSES - Financial
+            {'name': 'Financial - Savings Account', 'keywords': ['savings', 'savings account', 'transfer to savings'], 'group_name': 'Financial'},
+            {'name': 'Financial - Investment (Robinhood)', 'keywords': ['robinhood', 'investment', 'stock', 'trading', 'brokerage'], 'group_name': 'Financial'},
+            
+            # EXPENSES - Debt
+            {'name': 'Debt - Credit Card Jenny', 'keywords': ['jenny credit', 'jenny card', 'cc jenny'], 'group_name': 'Debt'},
+            {'name': 'Debt - Credit Card Ivan', 'keywords': ['ivan credit', 'ivan card', 'cc ivan'], 'group_name': 'Debt'},
+            {'name': 'Debt - Student Loan', 'keywords': ['student loan', 'education loan', 'navient', 'sallie mae'], 'group_name': 'Debt'},
+            {'name': 'Debt - Car Payments', 'keywords': ['car payment', 'auto loan', 'vehicle payment', 'car loan'], 'group_name': 'Debt'},
+            
+            # EXPENSES - Other
+            {'name': 'Other Expenses', 'keywords': [], 'group_name': 'Other Expenses'},
+
+            # EXPENSES - Business Expenses
+            {'name': 'Business Expenses - Software', 'keywords': ['software', 'saas', 'subscription software', 'adobe', 'microsoft', 'quickbooks', 'xero'], 'group_name': 'Business Expenses'},
+            {'name': 'Business Expenses - Employees', 'keywords': ['employee', 'payroll', 'salary', 'wage', 'staff', 'contractor'], 'group_name': 'Business Expenses'},
+
+            # INCOME - Business
+            {'name': 'Business - WBI', 'keywords': ['wbi', 'business income', 'work income'], 'group_name': 'Business'},
+            
+            # INCOME - Personal Income
+            {'name': 'Personal Income - Payroll Ivan', 'keywords': ['payroll ivan', 'ivan salary', 'ivan paycheck'], 'group_name': 'Personal Income'},
+            {'name': 'Personal Income - Payroll Jenny', 'keywords': ['payroll jenny', 'jenny salary', 'jenny paycheck'], 'group_name': 'Personal Income'},
+            {'name': 'Personal Income - Other Income', 'keywords': ['income', 'deposit', 'payment received', 'refund'], 'group_name': 'Personal Income'},
         ]
         
         created_categories = []
@@ -121,6 +160,31 @@ class DatabaseService:
                 print(f"Error creating default category {cat_data['name']}: {e}")
         
         return created_categories
+    
+    @staticmethod
+    def migrate_user_categories_to_new_structure(user_id: str, user_token: Optional[str] = None) -> Dict:
+        """Migrate existing user's categories to the new structure"""
+        try:
+            client = get_client(user_token)
+            
+            # Delete all existing categories for this user
+            client.table('categories').delete().eq('user_id', user_id).execute()
+            
+            # Create new categories with the proper structure
+            created_categories = DatabaseService.create_default_categories(user_id, user_token)
+            
+            return {
+                'success': True,
+                'message': f'Successfully migrated to new category structure. Created {len(created_categories)} categories.',
+                'categories_created': len(created_categories)
+            }
+            
+        except Exception as e:
+            print(f"Error migrating categories: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
     
     # =============================================
     # TRANSACTIONS OPERATIONS

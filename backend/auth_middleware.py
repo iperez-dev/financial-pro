@@ -50,20 +50,5 @@ def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(securi
     except:
         return None
 
-# For development - bypass auth if in development mode
-async def get_user_or_dev_mode(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """
-    Get user in production, or use development user in dev mode
-    """
-    environment = os.getenv("ENVIRONMENT", "production")
-    
-    if environment == "development":
-        # Return a mock user for development (using proper UUID format)
-        return {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "email": "dev@example.com",
-            "verified": True
-        }
-    
-    # Production mode - require real authentication
-    return await get_current_user(credentials)
+# Strict auth only – always require real authentication
+get_user_or_dev_mode = get_current_user
