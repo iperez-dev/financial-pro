@@ -715,6 +715,60 @@ export default function Report({ data, onDownloadPDF }) {
     }
   };
 
+  // Compute expense hierarchy directly from current transactions (exclude incomes)
+  const computeExpenseSummary = () => {
+    const groups = {};
+    const addTo = (grp, sub, amt) => {
+      if (!groups[grp]) {
+        groups[grp] = { total_amount: 0, transaction_count: 0, categories: {} };
+      }
+      groups[grp].total_amount += amt;
+      groups[grp].transaction_count += 1;
+      if (sub) {
+        if (!groups[grp].categories[sub]) {
+          groups[grp].categories[sub] = { total_amount: 0, transaction_count: 0 };
+        }
+        groups[grp].categories[sub].total_amount += amt;
+        groups[grp].categories[sub].transaction_count += 1;
+      }
+    };
+
+    (transactions || []).forEach(t => {
+      if (!t) return;
+      if (t.status === 'income') return; // exclude incomes
+      const amount = Number(t.amount) || 0;
+      const cat = t.category || '';
+      if (!cat) return;
+      const parts = cat.split(' - ');
+      if (parts.length === 2) {
+        addTo(parts[0], parts[1], amount);
+      } else {
+        // standalone group
+        addTo(cat, null, amount);
+      }
+    });
+
+    // Compute total absolute amount for group percent denominator
+    const totalAbs = Object.values(groups).reduce((s, g) => s + Math.abs(g.total_amount || 0), 0);
+    const withPercent = {};
+    Object.keys(groups).forEach(grp => {
+      const g = groups[grp];
+      const categoriesArr = Object.keys(g.categories).map(name => ({
+        category: name,
+        total_amount: g.categories[name].total_amount,
+        transaction_count: g.categories[name].transaction_count
+      }));
+      withPercent[grp] = {
+        total_amount: g.total_amount,
+        transaction_count: g.transaction_count,
+        percentage: totalAbs > 0 ? Number(((Math.abs(g.total_amount) / totalAbs) * 100).toFixed(2)) : 0,
+        categories: categoriesArr
+      };
+    });
+
+    return withPercent;
+  };
+
   const createNewCategory = async (transactionKey) => {
     if (!newCategoryName.trim()) return;
 
@@ -1558,19 +1612,12 @@ export default function Report({ data, onDownloadPDF }) {
                 {(() => {
                   if (!summary.grouped_categories) return null;
 
-                  // Build quick lookup from backend summary
-                  const groupMap = new Map();
-                  summary.grouped_categories.forEach(g => {
-                    groupMap.set(g.group, {
-                      total_amount: g.total_amount,
-                      transaction_count: g.transaction_count,
-                      percentage: g.percentage,
-                      categories: g.categories || []
-                    });
-                  });
+                  // Build quick lookup from live transactions to ensure accurate totals
+                  const liveMapRaw = computeExpenseSummary();
+                  const groupMap = new Map(Object.entries(liveMapRaw));
 
                   // Desired expense groups and subcategory order (match dropdown)
-                  const expenseGroups = ['Housing','Utilities','Transportation','Shopping & Food','Child Expenses','Healthcare','Personal Expenses','Financial','Debt','Other Expenses','Business Expenses'];
+                  const expenseGroups = ['Housing','Utilities','Transportation','Shopping & Food','Child Expenses','Healthcare','Personal Expenses','Financial','Debt','Other Expenses'];
                   const suborder = {
                     'Housing': ['Mortgage','HOA Fee','Property Taxes','Home Insurance','Home Repairs'],
                     'Utilities': ['City Gas','FPL','Water and Sewer','Internet','Phone'],
@@ -1591,12 +1638,17 @@ export default function Report({ data, onDownloadPDF }) {
                   expenseGroups.forEach(groupName => {
                     const g = groupMap.get(groupName);
                     // Group header row
+                    const groupPct = (() => {
+                      const cats = g?.categories || [];
+                      const sum = cats.reduce((s, c) => s + (Number(c?.percentage) || 0), 0);
+                      return Number(sum.toFixed(2));
+                    })();
                     rows.push(
-                      <tr key={`grp-${groupName}`} className={(rowIndex++ % 2 === 0) ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-gray-900">{groupName}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(g?.total_amount || 0)}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{g?.transaction_count || 0}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{g?.percentage || 0}%</td>
+                      <tr key={`grp-${groupName}`} className={(() => { rowIndex++; return 'bg-gray-50'; })()}>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm font-bold text-gray-900">{groupName}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">{formatCurrency(g?.total_amount || 0)}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">{g?.transaction_count || 0}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">{groupPct}%</td>
                       </tr>
                     );
 
@@ -1605,15 +1657,30 @@ export default function Report({ data, onDownloadPDF }) {
                     subs.forEach(sub => {
                       const c = (g?.categories || []).find(cat => (cat.category || '') === sub);
                       rows.push(
-                        <tr key={`sub-${groupName}-${sub}`} className={(rowIndex++ % 2 === 0) ? 'bg-white' : 'bg-gray-50'}>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 pl-8">{sub}</td>
+                        <tr key={`sub-${groupName}-${sub}`} className={(rowIndex++ && true) ? 'bg-white' : 'bg-white'}>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 pl-12">{sub}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(c?.total_amount || 0)}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{c?.transaction_count || 0}</td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{c?.percentage || 0}%</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900"></td>
                         </tr>
                       );
                     });
                   });
+
+                  // Total Expenses row (sum of all groups shown)
+                  const totals = Array.from(groupMap.values()).reduce((acc, g) => {
+                    acc.amount += (g?.total_amount || 0);
+                    acc.count += (g?.transaction_count || 0);
+                    return acc;
+                  }, { amount: 0, count: 0 });
+                  rows.push(
+                    <tr key="total-expenses" className="bg-gray-50">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm font-bold text-gray-900">Total Expenses</td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">{formatCurrency(totals.amount)}</td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">{totals.count}</td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 font-bold">100%</td>
+                    </tr>
+                  );
 
                   return rows;
                 })()}
