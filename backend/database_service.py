@@ -77,6 +77,33 @@ class DatabaseService:
         except Exception as e:
             print(f"Error deleting category: {e}")
             return False
+
+    @staticmethod
+    def clear_category_references(user_id: str, category_name: str, user_token: Optional[str] = None) -> None:
+        """When a category is deleted, remove references in transactions, overrides, and merchant mappings."""
+        try:
+            client = get_client(user_token)
+            # Reset transactions using this category
+            client.table('transactions').update({
+                'category_name': 'Uncategorized',
+                'category_id': None,
+                'status': 'new',
+                'is_learned': False
+            }).eq('user_id', user_id).eq('category_name', category_name).execute()
+        except Exception as e:
+            print(f"Error clearing category from transactions: {e}")
+        try:
+            # Remove overrides pointing to this category
+            client = get_client(user_token)
+            client.table('transaction_overrides').delete().eq('user_id', user_id).eq('new_category_name', category_name).execute()
+        except Exception as e:
+            print(f"Error clearing category from overrides: {e}")
+        try:
+            # Remove merchant mappings pointing to this category
+            client = get_client(user_token)
+            client.table('merchant_mappings').delete().eq('user_id', user_id).eq('category_name', category_name).execute()
+        except Exception as e:
+            print(f"Error clearing category from merchant mappings: {e}")
     
     @staticmethod
     def create_default_categories(user_id: str, user_token: Optional[str] = None) -> List[Dict]:

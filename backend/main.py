@@ -11,6 +11,7 @@ import os
 from pydantic import BaseModel
 import hashlib
 from datetime import datetime
+import calendar
 
 # Import Supabase components
 from supabase_client import supabase
@@ -357,13 +358,13 @@ async def create_category(category: CategoryCreate, current_user: dict = Depends
     try:
         user_id = current_user["id"]
         
-        # Check if category already exists
-        existing_category = next((c for c in _get_categories_for_user(user_id) if c["name"] == category.name), None)
+        # Check if category already exists (use user token to satisfy RLS)
+        token = current_user.get("token")
+        existing_category = next((c for c in _get_categories_for_user(user_id, token) if c["name"] == category.name), None)
         if existing_category:
             raise HTTPException(status_code=400, detail="Category already exists")
         
         # Create new category in database
-        token = current_user.get("token")
         new_category = DatabaseService.create_category(
             user_id,
             category.name,
@@ -373,6 +374,7 @@ async def create_category(category: CategoryCreate, current_user: dict = Depends
         )
         
         if not new_category:
+            print(f"❌ Failed to create category. Payload: name={category.name}, group={category.group}, keywords={category.keywords}")
             raise HTTPException(status_code=500, detail="Failed to create category")
         
         # Convert to legacy format for response
@@ -426,9 +428,16 @@ async def delete_category(category_id: str, current_user: dict = Depends(get_use
     try:
         user_id = current_user["id"]
         token = current_user.get("token")
+        # Fetch category name before deletion
+        cats = DatabaseService.get_categories(user_id, token)
+        cat = next((c for c in cats if str(c.get('id')) == str(category_id)), None)
+        cat_name = cat.get('name') if cat else None
         success = DatabaseService.delete_category(user_id, category_id, token)
         if not success:
             raise HTTPException(status_code=404, detail="Category not found or delete failed")
+        if cat_name:
+            # Clear references so UIs reflect removal immediately
+            DatabaseService.clear_category_references(user_id, cat_name, token)
         return {"message": "Category deleted successfully"}
     except HTTPException:
         raise
@@ -526,6 +535,12 @@ async def update_transaction_category_by_key(transaction_key: str, category_data
         success = _save_transaction_override(user_id, transaction_key, category, token)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save transaction override")
+        # Also persist the category directly on the transaction row (best-effort)
+        try:
+            DatabaseService.update_transaction_category(user_id, transaction_key, category, token)
+        except Exception:
+            # Non-fatal: override still saved; transaction update may fail if row doesn't exist yet
+            pass
         
         print(f"Successfully updated category for {transaction_key} to {category}")
         return {
@@ -901,6 +916,19 @@ async def process_single_file_internal(file: UploadFile, current_user: dict) -> 
     
     transactions = df[transaction_columns].to_dict('records')
     
+    # Persist transactions to the database (upsert on user_id, transaction_key)
+    try:
+        token = current_user.get("token")
+        file_hash = hashlib.sha256(contents).hexdigest()
+    except Exception:
+        file_hash = None
+    file_info = {"name": file.filename, "hash": file_hash}
+    try:
+        DatabaseService.save_transactions(user_id, transactions, file_info, token)
+    except Exception as _:
+        # Non-fatal for processing response; persistence failure is logged server-side
+        pass
+    
     # Monthly breakdown (if date column exists)
     monthly_data = []
     date_columns = [col for col in df.columns if 'date' in col.lower()]
@@ -931,6 +959,94 @@ async def process_single_file_internal(file: UploadFile, current_user: dict) -> 
         "monthly_data": monthly_data,
         "message": f"Successfully processed {total_transactions} transactions ({expense_transactions} expenses, {income_transactions} income)"
     }
+
+@app.get("/summary/monthly")
+async def get_monthly_summary(months: Optional[str] = None, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Return per-month income/expense summaries from persisted transactions.
+    Optional query param `months` as comma-separated YYYY-MM values to limit the range.
+    Defaults to the last 6 months (including current).
+    """
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        # Determine requested months
+        if months:
+            month_list = [m.strip() for m in months.split(",") if m.strip()]
+        else:
+            # Default: last 6 months including current
+            today = datetime.utcnow()
+            month_list = []
+            year = today.year
+            month = today.month
+            for _ in range(6):
+                month_list.append(f"{year:04d}-{month:02d}")
+                month -= 1
+                if month == 0:
+                    month = 12
+                    year -= 1
+            month_list = list(reversed(month_list))
+
+        # Compute date bounds
+        def first_day_of_month(ym: str) -> str:
+            y, m = [int(x) for x in ym.split("-")]
+            return f"{y:04d}-{m:02d}-01"
+
+        def last_day_of_month(ym: str) -> str:
+            y, m = [int(x) for x in ym.split("-")]
+            last = calendar.monthrange(y, m)[1]
+            return f"{y:04d}-{m:02d}-{last:02d}"
+
+        start_date = first_day_of_month(min(month_list)) if month_list else None
+        end_date = last_day_of_month(max(month_list)) if month_list else None
+
+        client = get_client(token)
+        query = client.table('transactions').select('amount, transaction_date, status, category_name').eq('user_id', user_id)
+        if start_date:
+            query = query.gte('transaction_date', start_date)
+        if end_date:
+            query = query.lte('transaction_date', end_date)
+        result = query.execute()
+
+        # Aggregate per month
+        monthly: Dict[str, Any] = {}
+        for row in result.data or []:
+            try:
+                dt = pd.to_datetime(row.get('transaction_date'))
+                if pd.isna(dt):
+                    continue
+                month_key = dt.strftime('%Y-%m')
+            except Exception:
+                continue
+            amount = float(row.get('amount', 0) or 0)
+            category_name = row.get('category_name') or 'Uncategorized'
+
+            bucket = monthly.setdefault(month_key, {
+                'total_expenses': 0.0,
+                'total_income': 0.0,
+                'expense_transactions': 0,
+                'income_transactions': 0,
+                'categories': {}
+            })
+
+            if amount >= 0:
+                bucket['total_income'] += amount
+                bucket['income_transactions'] += 1
+            else:
+                abs_amt = abs(amount)
+                bucket['total_expenses'] += abs_amt
+                bucket['expense_transactions'] += 1
+                cat = bucket['categories'].setdefault(category_name, {'category': category_name, 'total_amount': 0.0, 'transaction_count': 0})
+                cat['total_amount'] += abs_amt
+                cat['transaction_count'] += 1
+
+        # Convert category maps to lists
+        for m in monthly.values():
+            m['categories'] = sorted(m['categories'].values(), key=lambda x: x['total_amount'], reverse=True)
+
+        return {"months": monthly, "requested_months": month_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting monthly summary: {str(e)}")
 
 @app.post("/process-multiple-expenses")
 async def process_multiple_expenses(files: List[UploadFile] = File(...), current_user: dict = Depends(get_user_or_dev_mode)):

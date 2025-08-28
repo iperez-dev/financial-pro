@@ -33,6 +33,8 @@ export default function Report({ data, onDownloadPDF }) {
   const { showScrollTop, scrollToTop } = useScrollTop(300);
   const [openDropdown, setOpenDropdown] = useState(null); // Track which dropdown is open
   const [deleteModal, setDeleteModal] = useState(null); // { categoryId, categoryName } or null
+  const [newCategoryModal, setNewCategoryModal] = useState({ open: false, txKey: null });
+  const [newCategoryGroup, setNewCategoryGroup] = useState('Housing');
 
   // Helper function to show update status icons
   const showUpdateStatus = (transactionKey, status) => {
@@ -144,7 +146,12 @@ export default function Report({ data, onDownloadPDF }) {
               orderedSubcategories.push(found);
             }
           });
-          sortedGroups[groupName] = orderedSubcategories;
+          // Append any categories not in the predefined order so new categories still appear
+          const existing = new Set(orderedSubcategories.map(c => (c.subcategory || c.name)));
+          const leftovers = groups[groupName].filter(cat => !existing.has(cat.subcategory || cat.name));
+          // Keep leftovers alphabetically by display name
+          leftovers.sort((a,b) => ((a.subcategory||a.name)||'').localeCompare((b.subcategory||b.name)||''));
+          sortedGroups[groupName] = [...orderedSubcategories, ...leftovers];
         } else {
           sortedGroups[groupName] = groups[groupName];
         }
@@ -760,9 +767,16 @@ export default function Report({ data, onDownloadPDF }) {
       if (parts.length === 2) {
         addTo(parts[0], parts[1], amount);
       } else {
-        // Try to map standalone subcategory to a known group
+        // Try to map standalone subcategory to a known group via current categories list first, then fallback
         const sub = cat;
-        const parent = Object.keys(suborder).find(g => (suborder[g] || []).includes(sub));
+        let parent = null;
+        const match = (categories || []).find(c => (c?.name || '').endsWith(` - ${sub}`));
+        if (match) {
+          parent = (match.name || '').split(' - ')[0];
+        }
+        if (!parent) {
+          parent = Object.keys(suborder).find(g => (suborder[g] || []).includes(sub));
+        }
         if (parent) {
           addTo(parent, sub, amount);
         } else {
@@ -801,24 +815,77 @@ export default function Report({ data, onDownloadPDF }) {
         .split(',')
         .map(k => k.trim())
         .filter(k => k.length > 0);
+      const fullName = `${newCategoryGroup} - ${newCategoryName.trim()}`;
 
-      const response = await api.createCategory(newCategoryName.trim(), keywords);
-      if (response) {
-        // Reload categories
-        await loadCategories();
-        
-        // Update the transaction with the new category
-        await updateTransactionCategory(transactionKey, newCategoryName.trim());
-        
-        // Reset form
+      // If category already exists locally, skip API create and just assign it
+      const alreadyExists = (categories || []).some(c => c.name === fullName);
+      if (alreadyExists) {
+        await updateTransactionCategory(transactionKey, fullName);
         setNewCategoryName('');
         setNewCategoryKeywords('');
-        setShowNewCategoryForm(null);
-      } else {
-        const errorData = await response.json();
-        showUpdateStatus(transactionKey, 'error');
+        setNewCategoryGroup('Housing');
+        setNewCategoryModal({ open: false, txKey: null });
+        return;
       }
+
+      const response = await api.createCategory(fullName, keywords, newCategoryGroup);
+      // Optimistically add to categories for immediate dropdown availability
+      if (response?.category) {
+        setCategories(prev => {
+          const exists = prev?.some(c => c.name === response.category.name);
+          if (exists) return prev;
+          return [...(prev || []), {
+            id: String(response.category.id || `temp-${Date.now()}`),
+            name: response.category.name,
+            keywords: response.category.keywords || [],
+            group: response.category.group || newCategoryGroup,
+          }];
+        });
+      } else {
+        setCategories(prev => {
+          const exists = prev?.some(c => c.name === fullName);
+          if (exists) return prev;
+          return [...(prev || []), {
+            id: `temp-${Date.now()}`,
+            name: fullName,
+            keywords,
+            group: newCategoryGroup,
+          }];
+        });
+      }
+      // Update the transaction with the new category
+      await updateTransactionCategory(transactionKey, fullName);
+      // Refresh categories in the background (no need to block UI)
+      loadCategories();
+
+      // Reset form and close modal
+      setNewCategoryName('');
+      setNewCategoryKeywords('');
+      setNewCategoryGroup('Housing');
+      setNewCategoryModal({ open: false, txKey: null });
     } catch (err) {
+      // If backend reports category exists, still proceed to assign it
+      if (err?.message && String(err.message).toLowerCase().includes('category already exists')) {
+        const fullName = `${newCategoryGroup} - ${newCategoryName.trim()}`;
+        // Ensure it appears in dropdown immediately
+        setCategories(prev => {
+          const exists = prev?.some(c => c.name === fullName);
+          if (exists) return prev;
+          return [...(prev || []), {
+            id: `temp-${Date.now()}`,
+            name: fullName,
+            keywords,
+            group: newCategoryGroup,
+          }];
+        });
+        await updateTransactionCategory(transactionKey, fullName);
+        loadCategories();
+        setNewCategoryName('');
+        setNewCategoryKeywords('');
+        setNewCategoryGroup('Housing');
+        setNewCategoryModal({ open: false, txKey: null });
+        return;
+      }
       console.error('Error creating category:', err);
       showUpdateStatus(transactionKey, 'error');
     }
@@ -830,8 +897,8 @@ export default function Report({ data, onDownloadPDF }) {
     console.log('🎯 Category value length:', value.length);
 
     if (value === '__NEW_CATEGORY__') {
-      console.log('📝 Opening new category form');
-      setShowNewCategoryForm(transactionKey);
+      console.log('📝 Opening new category modal');
+      setNewCategoryModal({ open: true, txKey: transactionKey });
     } else {
       console.log('🔄 Updating category to:', value);
       console.log('🔄 Category value trimmed:', value.trim());
@@ -1343,7 +1410,7 @@ export default function Report({ data, onDownloadPDF }) {
                       </div>
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm ${transaction.status === 'income' ? 'text-gray-500' : 'text-gray-900'}`}>
-                      {showNewCategoryForm === transaction.transaction_key ? (
+                      {false && showNewCategoryForm === transaction.transaction_key ? (
                         <div className="space-y-2 min-w-[320px]">
                           <input
                             type="text"
@@ -1622,6 +1689,62 @@ export default function Report({ data, onDownloadPDF }) {
         {/* Expense Summary - single hierarchical table */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
           <h3 className="text-xl font-semibold text-gray-900 mb-4">Expense Summary</h3>
+          {/* New Category Modal */}
+          {newCategoryModal.open && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Add New Category</h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Category Group</label>
+                    <select
+                      className="w-full text-sm border border-gray-300 rounded px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={newCategoryGroup}
+                      onChange={e => setNewCategoryGroup(e.target.value)}
+                    >
+                      {['Housing','Utilities','Transportation','Shopping & Food','Child Expenses','Healthcare','Personal Expenses','Financial','Debt','Other Expenses'].map(g => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Category Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Streaming Services"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      className="w-full text-sm border border-gray-300 rounded px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Keywords (optional, comma-separated)</label>
+                    <input
+                      type="text"
+                      placeholder="netflix, spotify, hulu"
+                      value={newCategoryKeywords}
+                      onChange={(e) => setNewCategoryKeywords(e.target.value)}
+                      className="w-full text-sm border border-gray-300 rounded px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <div className="mt-5 flex justify-end space-x-2">
+                  <button
+                    onClick={() => setNewCategoryModal({ open: false, txKey: null })}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => createNewCategory(newCategoryModal.txKey)}
+                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md hover:bg-green-700"
+                  >
+                    Create Category
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
@@ -1674,13 +1797,28 @@ export default function Report({ data, onDownloadPDF }) {
 
                     // Subcategory rows in desired order
                     const subs = suborder[groupName] || [];
+                    const used = new Set();
                     subs.forEach(sub => {
                       const c = (g?.categories || []).find(cat => (cat.category || '') === sub);
+                      used.add(sub);
                       rows.push(
                         <tr key={`sub-${groupName}-${sub}`} className={(rowIndex++ && true) ? 'bg-white' : 'bg-white'}>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 pl-12">{sub}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(c?.total_amount || 0)}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{c?.transaction_count || 0}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900"></td>
+                        </tr>
+                      );
+                    });
+                    // Render any additional categories under this group (newly created)
+                    const extraCats = (g?.categories || []).filter(cat => !used.has(cat.category || ''))
+                      .sort((a,b) => (a.category||'').localeCompare(b.category||''));
+                    extraCats.forEach(cat => {
+                      rows.push(
+                        <tr key={`sub-${groupName}-${cat.category}`} className={(rowIndex++ && true) ? 'bg-white' : 'bg-white'}>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 pl-12">{cat.category}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(cat.total_amount || 0)}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{cat.transaction_count || 0}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900"></td>
                         </tr>
                       );
