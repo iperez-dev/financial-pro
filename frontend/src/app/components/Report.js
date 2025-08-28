@@ -718,6 +718,23 @@ export default function Report({ data, onDownloadPDF }) {
   // Compute expense hierarchy directly from current transactions (exclude incomes)
   const computeExpenseSummary = () => {
     const groups = {};
+    const parseAmount = (val) => {
+      if (typeof val === 'number') return val;
+      const n = Number(String(val).replace(/[^0-9.-]/g, ''));
+      return isNaN(n) ? 0 : n;
+    };
+    const suborder = {
+      'Housing': ['Mortgage','HOA Fee','Property Taxes','Home Insurance','Home Repairs'],
+      'Utilities': ['City Gas','FPL','Water and Sewer','Internet','Phone'],
+      'Transportation': ['Car Insurance','Car Repairs','Fuel','Tolls'],
+      'Shopping & Food': ['Groceries','Dining Out','Amazon'],
+      'Child Expenses': ['Childcare','College Fund'],
+      'Healthcare': ['Doctor Office','Pharmacy'],
+      'Personal Expenses': ['Allowance Jenny','Allowance Ivan','Donations','Subscriptions'],
+      'Financial': ['Savings Account','Investment (Robinhood)'],
+      'Debt': ['Credit Card Jenny','Credit Card Ivan','Student Loan','Car Payments'],
+      'Other Expenses': ['Additional Expenses']
+    };
     const addTo = (grp, sub, amt) => {
       if (!groups[grp]) {
         groups[grp] = { total_amount: 0, transaction_count: 0, categories: {} };
@@ -736,15 +753,22 @@ export default function Report({ data, onDownloadPDF }) {
     (transactions || []).forEach(t => {
       if (!t) return;
       if (t.status === 'income') return; // exclude incomes
-      const amount = Number(t.amount) || 0;
+      const amount = parseAmount(t.amount);
       const cat = t.category || '';
       if (!cat) return;
       const parts = cat.split(' - ');
       if (parts.length === 2) {
         addTo(parts[0], parts[1], amount);
       } else {
-        // standalone group
-        addTo(cat, null, amount);
+        // Try to map standalone subcategory to a known group
+        const sub = cat;
+        const parent = Object.keys(suborder).find(g => (suborder[g] || []).includes(sub));
+        if (parent) {
+          addTo(parent, sub, amount);
+        } else {
+          // truly standalone group fallback
+          addTo(cat, null, amount);
+        }
       }
     });
 
@@ -1638,11 +1662,7 @@ export default function Report({ data, onDownloadPDF }) {
                   expenseGroups.forEach(groupName => {
                     const g = groupMap.get(groupName);
                     // Group header row
-                    const groupPct = (() => {
-                      const cats = g?.categories || [];
-                      const sum = cats.reduce((s, c) => s + (Number(c?.percentage) || 0), 0);
-                      return Number(sum.toFixed(2));
-                    })();
+                    const groupPct = Number((g?.percentage || 0).toFixed(2));
                     rows.push(
                       <tr key={`grp-${groupName}`} className={(() => { rowIndex++; return 'bg-gray-50'; })()}>
                         <td className="px-4 py-2 whitespace-nowrap text-sm font-bold text-gray-900">{groupName}</td>
