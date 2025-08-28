@@ -629,28 +629,90 @@ export default function Report({ data, onDownloadPDF }) {
 
   // Helper functions for Zelle payments
   const isZellePayment = (description) => {
-    return description.toLowerCase().includes('zelle payment to');
+    const d = (description || '').toLowerCase();
+    return d.includes('zelle payment to') || d.includes('zelle payment from');
   };
 
   const extractZelleRecipient = (description) => {
     if (!isZellePayment(description)) return null;
-    
 
-    
-    // Extract recipient name - pattern: "Zelle payment to [Name] [phone/numbers]"
-    const match = description.match(/zelle payment to\s+([^0-9]+)/i);
+    // Support both "to" and "from" forms
+    let match = description.match(/zelle payment to\s+([^0-9]+)/i);
+    if (!match) {
+      match = description.match(/zelle payment from\s+([^0-9]+)/i);
+    }
     if (match) {
-      const recipient = match[1].trim();
-      // Convert to Title Case for consistency
-      const titleCaseRecipient = recipient.split(' ')
+      const raw = match[1].trim();
+      const titleCase = raw.split(' ')
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
-      
-      console.log(`📱 Extracted Zelle recipient: "${titleCaseRecipient}"`);
-      return titleCaseRecipient;
+      console.log(`📱 Extracted Zelle party: "${titleCase}"`);
+      return titleCase;
     }
-    
     return null;
+  };
+
+  // Compute custom Income Summary rows
+  const computeIncomeSummaryRows = () => {
+    try {
+      const incomeTxs = (transactions || []).filter(t => t.status === 'income');
+      if (incomeTxs.length === 0) return [];
+
+      // Bermello Ajamil Payroll: any income containing both BERMELLO and PAYROLL
+      const bermello = incomeTxs.filter(t => {
+        const d = (t.description || '').toUpperCase();
+        return d.includes('BERMELLO') && d.includes('PAYROLL');
+      });
+      const bermelloTotal = bermello.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+      const bermelloCount = bermello.length;
+
+      // Payroll Baptist: Zelle from Jennifer Ocana Garcia (positive amounts only)
+      const baptist = incomeTxs.filter(t => {
+        const desc = t.description || '';
+        if (!isZellePayment(desc)) return false;
+        const r = extractZelleRecipient(desc);
+        return r === 'Jennifer Ocana Garcia' && Number(t.amount) > 0;
+      });
+      const baptistTotal = baptist.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+      const baptistCount = baptist.length;
+
+      // Denominator is the sum of the rows we actually show in this table (custom rows)
+      const tableDenominator = bermelloTotal + baptistTotal;
+
+      const rows = [];
+      if (bermelloCount > 0) {
+        rows.push({
+          name: 'Bermello Ajamil Payroll',
+          total_amount: bermelloTotal,
+          transaction_count: bermelloCount,
+          percentage: tableDenominator > 0 ? Number(((bermelloTotal / tableDenominator) * 100).toFixed(1)) : 0
+        });
+      }
+      if (baptistCount > 0) {
+        rows.push({
+          name: 'Payroll Baptist',
+          total_amount: baptistTotal,
+          transaction_count: baptistCount,
+          percentage: tableDenominator > 0 ? Number(((baptistTotal / tableDenominator) * 100).toFixed(1)) : 0
+        });
+      }
+
+      return rows;
+    } catch (e) {
+      console.error('Error computing income summary rows:', e);
+      return [];
+    }
+  };
+
+  const computeIncomeTotals = () => {
+    try {
+      const rows = computeIncomeSummaryRows();
+      const totalAmount = rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+      const totalCount = rows.reduce((s, r) => s + (Number(r.transaction_count) || 0), 0);
+      return { totalAmount, totalCount };
+    } catch (e) {
+      return { totalAmount: 0, totalCount: 0 };
+    }
   };
 
   const createNewCategory = async (transactionKey) => {
@@ -1430,22 +1492,49 @@ export default function Report({ data, onDownloadPDF }) {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {summary.income_categories.map((income, index) => (
-                    <tr key={income.category} className={index % 2 === 0 ? 'bg-white' : 'bg-green-50'}>
+                  {/* Preferred custom rows first */}
+                  {computeIncomeSummaryRows().map((row, idx) => (
+                    <tr key={`custom-${row.name}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-green-50'}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {income.category}
+                        {row.name}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600 font-semibold">
-                        {formatCurrency(income.total_amount)}
+                        {formatCurrency(row.total_amount)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {income.transaction_count}
+                        {row.transaction_count}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {income.percentage}%
+                        {row.percentage}%
                       </td>
                     </tr>
                   ))}
+                  {/* Total Income row */}
+                  {(() => {
+                    const { totalAmount, totalCount } = computeIncomeTotals();
+                    const custom = computeIncomeSummaryRows();
+                    const customSum = custom.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+                    const customCount = custom.reduce((s, r) => s + (Number(r.transaction_count) || 0), 0);
+                    const remainingAmount = Math.max(0, totalAmount - customSum);
+                    const remainingCount = Math.max(0, totalCount - customCount);
+                    const percent = totalAmount > 0 ? Number(((totalAmount / totalAmount) * 100).toFixed(1)) : 0;
+                    return (
+                      <tr key="total-income" className={(custom.length % 2 === 0) ? 'bg-white' : 'bg-green-50'}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          Total Income
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-green-700 font-bold">
+                          {formatCurrency(totalAmount)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">
+                          {totalCount}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">
+                          {percent}%
+                        </td>
+                      </tr>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
