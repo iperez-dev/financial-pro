@@ -1541,63 +1541,84 @@ export default function Report({ data, onDownloadPDF }) {
           </div>
         )}
 
-        {/* Category Summary - moved below transactions */}
+        {/* Expense Summary - single hierarchical table */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">Expense Categories by Group</h3>
-          <div className="space-y-6">
-            {summary.grouped_categories && summary.grouped_categories.map((group, groupIndex) => (
-              <div key={groupIndex} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <h4 className="text-lg font-medium text-gray-800">{group.group}</h4>
-                  <div className="text-right">
-                    <div className="text-lg font-semibold text-gray-900">
-                      {formatCurrency(group.total_amount)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      {group.percentage}% • {group.transaction_count} transactions
-                    </div>
-                  </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Category
-                        </th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Amount
-                        </th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Transactions
-                        </th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Percentage
-                        </th>
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Expense Summary</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transactions</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Percentage</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {(() => {
+                  if (!summary.grouped_categories) return null;
+
+                  // Build quick lookup from backend summary
+                  const groupMap = new Map();
+                  summary.grouped_categories.forEach(g => {
+                    groupMap.set(g.group, {
+                      total_amount: g.total_amount,
+                      transaction_count: g.transaction_count,
+                      percentage: g.percentage,
+                      categories: g.categories || []
+                    });
+                  });
+
+                  // Desired expense groups and subcategory order (match dropdown)
+                  const expenseGroups = ['Housing','Utilities','Transportation','Shopping & Food','Child Expenses','Healthcare','Personal Expenses','Financial','Debt','Other Expenses','Business Expenses'];
+                  const suborder = {
+                    'Housing': ['Mortgage','HOA Fee','Property Taxes','Home Insurance','Home Repairs'],
+                    'Utilities': ['City Gas','FPL','Water and Sewer','Internet','Phone'],
+                    'Transportation': ['Car Insurance','Car Repairs','Fuel','Tolls'],
+                    'Shopping & Food': ['Groceries','Dining Out','Amazon'],
+                    'Child Expenses': ['Childcare','College Fund'],
+                    'Healthcare': ['Doctor Office','Pharmacy'],
+                    'Personal Expenses': ['Allowance Jenny','Allowance Ivan','Donations','Subscriptions'],
+                    'Financial': ['Savings Account','Investment (Robinhood)'],
+                    'Debt': ['Credit Card Jenny','Credit Card Ivan','Student Loan','Car Payments'],
+                    'Other Expenses': ['Additional Expenses'],
+                    'Business Expenses': ['Software','Employees']
+                  };
+
+                  const rows = [];
+                  let rowIndex = 0;
+
+                  expenseGroups.forEach(groupName => {
+                    const g = groupMap.get(groupName);
+                    // Group header row
+                    rows.push(
+                      <tr key={`grp-${groupName}`} className={(rowIndex++ % 2 === 0) ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-gray-900">{groupName}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(g?.total_amount || 0)}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{g?.transaction_count || 0}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{g?.percentage || 0}%</td>
                       </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {group.categories.map((category, index) => (
-                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                            {category.category}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                            {formatCurrency(category.total_amount)}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                            {category.transaction_count}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
-                            {category.percentage}%
-                          </td>
+                    );
+
+                    // Subcategory rows in desired order
+                    const subs = suborder[groupName] || [];
+                    subs.forEach(sub => {
+                      const c = (g?.categories || []).find(cat => (cat.category || '') === sub);
+                      rows.push(
+                        <tr key={`sub-${groupName}-${sub}`} className={(rowIndex++ % 2 === 0) ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 pl-8">{sub}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{formatCurrency(c?.total_amount || 0)}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{c?.transaction_count || 0}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">{c?.percentage || 0}%</td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
+                      );
+                    });
+                  });
+
+                  return rows;
+                })()}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
