@@ -1,7 +1,7 @@
 'use client';
 
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import api, { getCategories, resetTransactionCategories, updateTransactionCategory as apiUpdateTxCategory, learnFromTransaction as apiLearn, saveZelleRecipient as apiSaveZelle, migrateCategories, getTransactionOverrides, getMerchantMappings } from '../../lib/api';
 import { formatCurrency, formatFilename } from '../../lib/formatters';
@@ -35,6 +35,31 @@ export default function Report({ data, onDownloadPDF }) {
   const [deleteModal, setDeleteModal] = useState(null); // { categoryId, categoryName } or null
   const [newCategoryModal, setNewCategoryModal] = useState({ open: false, txKey: null });
   const [newCategoryGroup, setNewCategoryGroup] = useState('Housing');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+
+  // Debug logger (no-op in production)
+  const isProd = process.env.NODE_ENV === 'production';
+  const debug = {
+    log: (...args) => { if (!isProd) console.log(...args); },
+    warn: (...args) => { if (!isProd) console.warn(...args); }
+  };
+
+  // Memoize heavy derived data
+  const organizedCategories = useMemo(() => organizeCategories(categories), [categories]);
+  const totalPages = useMemo(() => Math.max(1, Math.ceil((transactions?.length || 0) / pageSize)), [transactions?.length, pageSize]);
+  const paginatedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    return transactions.slice(start, end);
+  }, [transactions, currentPage, pageSize]);
+
+  useEffect(() => {
+    // Ensure current page is valid when data size or page size changes
+    if (currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [totalPages]);
 
   // Helper function to show update status icons
   const showUpdateStatus = (transactionKey, status) => {
@@ -72,7 +97,7 @@ export default function Report({ data, onDownloadPDF }) {
   };
 
   // Organize categories by parent groups for hierarchical display with custom order
-  const organizeCategories = (categories) => {
+  function organizeCategories(categories) {
     const groups = {};
     
     // Define the exact order for groups and subcategories
@@ -159,7 +184,7 @@ export default function Report({ data, onDownloadPDF }) {
     });
 
     return sortedGroups;
-  };
+  }
 
   if (!data || !data.summary) {
     return null;
@@ -171,7 +196,7 @@ export default function Report({ data, onDownloadPDF }) {
   useEffect(() => {
     const loadTransactionsWithOverrides = async () => {
       if (data.transactions) {
-        console.log('Received transactions:', data.transactions.slice(0, 2)); // Log first 2 transactions
+        debug.log('Received transactions sample:', data.transactions.slice(0, 2));
 
         // Add fallback transaction keys and status if missing
         const transactionsWithKeys = data.transactions.map((transaction, index) => {
@@ -181,31 +206,31 @@ export default function Report({ data, onDownloadPDF }) {
           if (!transaction.transaction_key) {
             const cleanDesc = transaction.description.slice(0, 20).replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
             const fallbackKey = `${cleanDesc || 'transaction'}_${Math.abs(transaction.amount).toString().replace('.', '')}_${index}`;
-            console.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
+            debug.warn(`Missing transaction_key for transaction ${index}, using fallback: ${fallbackKey}`);
             updatedTransaction.transaction_key = fallbackKey;
           }
 
           // Add fallback status if missing
           if (!transaction.status) {
-            console.warn(`Missing status for transaction ${index}, using fallback: 'new'`);
+            debug.warn(`Missing status for transaction ${index}, using fallback: 'new'`);
             updatedTransaction.status = 'new';
           }
 
           return updatedTransaction;
         });
 
-        // Load transaction overrides from the database
-        console.log('🔄 Loading overrides for transactions...');
-        const overrides = await loadTransactionOverrides();
+        // Load overrides and merchant mappings in parallel
+        console.log('🔄 Loading overrides and merchant mappings in parallel...');
+        const [overrides, merchantMappings] = await Promise.all([
+          loadTransactionOverrides(),
+          loadMerchantMappings()
+        ]);
 
-        // Apply overrides to transactions
+        // Apply overrides then auto-categorization
         let transactionsWithOverrides = applyOverridesToTransactions(transactionsWithKeys, overrides);
-
-        // Apply merchant-based auto-categorization to remaining uncategorized/new ones
-        const merchantMappings = await loadMerchantMappings();
         transactionsWithOverrides = applyAutoCategorization(transactionsWithOverrides, merchantMappings);
 
-        console.log('✅ Setting transactions with overrides applied');
+        debug.log('✅ Setting transactions with overrides applied');
         setTransactions(transactionsWithOverrides);
 
         // Initialize status for transactions that already have saved categories
@@ -327,7 +352,7 @@ export default function Report({ data, onDownloadPDF }) {
       const data = await getCategories();
       const categoriesArray = data.categories || data;
       console.log('📂 Loaded categories:', categoriesArray.length, 'categories');
-      console.log('📂 Category names:', categoriesArray.map(c => c.name));
+      debug.log('📂 Category names:', categoriesArray.map(c => c.name));
 
       setCategories(categoriesArray);
       console.log('✅ Categories loaded successfully');
@@ -367,7 +392,7 @@ export default function Report({ data, onDownloadPDF }) {
     if (!transactions || transactions.length === 0) return transactions;
     if (!mappings || Object.keys(mappings).length === 0) return transactions;
 
-    console.log('🧠 Applying auto-categorization based on merchant mappings...');
+    debug.log('🧠 Applying auto-categorization based on merchant mappings...');
     return transactions.map(t => {
       // Respect saved/manual overrides and income
       if (t.status === 'saved' || t.status === 'income') return t;
@@ -396,11 +421,11 @@ export default function Report({ data, onDownloadPDF }) {
   };
 
   const applyOverridesToTransactions = (transactions, overrides) => {
-    console.log('🔄 Applying overrides to transactions...');
+    debug.log('🔄 Applying overrides to transactions...');
     return transactions.map(transaction => {
       const overrideCategory = overrides[transaction.transaction_key];
       if (overrideCategory) {
-        console.log(`✅ Applying override: ${transaction.transaction_key} -> ${overrideCategory}`);
+        debug.log(`✅ Applying override: ${transaction.transaction_key} -> ${overrideCategory}`);
         return {
           ...transaction,
           category: overrideCategory,
@@ -719,6 +744,172 @@ export default function Report({ data, onDownloadPDF }) {
       return { totalAmount, totalCount };
     } catch (e) {
       return { totalAmount: 0, totalCount: 0 };
+    }
+  };
+
+  // Compute Business Income (positive transactions excluding Bermello payroll and Zelle from Jennifer)
+  const computeBusinessIncomeRows = () => {
+    try {
+      const rowsMap = new Map();
+      (transactions || []).forEach(t => {
+        const amount = Number(t?.amount) || 0;
+        if (amount <= 0) return; // only positive transactions
+
+        const desc = t?.description || '';
+        const upper = desc.toUpperCase();
+
+        // Exclusions: Bermello Ajamil Payroll and Zelle from Jennifer Ocana Garcia
+        const isBermelloPayroll = upper.includes('BERMELLO') && upper.includes('PAYROLL');
+        if (isBermelloPayroll) return;
+
+        if (isZellePayment(desc)) {
+          const recipient = extractZelleRecipient(desc);
+          if (recipient === 'Jennifer Ocana Garcia') return; // exclude Jennifer
+          
+          if (!recipient) {
+            const key = 'ZELLE:Unknown';
+            const prev = rowsMap.get(key) || { name: 'Unknown Zelle', total_amount: 0, transaction_count: 0 };
+            prev.total_amount += Math.abs(amount);
+            prev.transaction_count += 1;
+            rowsMap.set(key, prev);
+            return;
+          }
+          
+          // Normalize business name by taking first 2-3 significant words
+          const normalizeBusinessName = (name) => {
+            const words = name.trim().split(/\s+/).filter(w => w.length > 0);
+            
+            // Remove common business suffixes and codes
+            const filtered = words.filter(word => {
+              const w = word.toLowerCase();
+              // Skip very short codes (likely reference codes)
+              if (word.length <= 3 && /^[a-z]+$/i.test(word)) return false;
+              // Skip common business suffixes
+              if (['inc', 'llc', 'corp', 'ltd', 'co'].includes(w)) return false;
+              return true;
+            });
+            
+            // Take first 2-3 meaningful words for grouping
+            const significantWords = filtered.slice(0, 3);
+            return significantWords.join(' ');
+          };
+          
+          const normalizedName = normalizeBusinessName(recipient);
+          
+          // Try to find existing similar business by checking if any existing key starts with the same words
+          let matchingKey = null;
+          for (const [existingKey, existingEntry] of rowsMap.entries()) {
+            if (existingKey.startsWith('ZELLE:')) {
+              const existingNormalized = normalizeBusinessName(existingEntry.name);
+              // Check if they share the same first 2 words
+              const currentWords = normalizedName.split(' ');
+              const existingWords = existingNormalized.split(' ');
+              
+              if (currentWords.length >= 2 && existingWords.length >= 2) {
+                if (currentWords[0] === existingWords[0] && currentWords[1] === existingWords[1]) {
+                  matchingKey = existingKey;
+                  break;
+                }
+              }
+            }
+          }
+          
+          if (matchingKey) {
+            // Add to existing group
+            const prev = rowsMap.get(matchingKey);
+            prev.total_amount += Math.abs(amount);
+            prev.transaction_count += 1;
+            debug.log(`Zelle Business Income (grouped): "${desc}" -> "${prev.name}" (${formatCurrency(amount)})`);
+          } else {
+            // Create new group
+            const key = `ZELLE:${normalizedName}`;
+            const prev = rowsMap.get(key) || { name: normalizedName, total_amount: 0, transaction_count: 0 };
+            prev.total_amount += Math.abs(amount);
+            prev.transaction_count += 1;
+            rowsMap.set(key, prev);
+            debug.log(`Zelle Business Income (new): "${desc}" -> "${normalizedName}" (${formatCurrency(amount)})`);
+          }
+          
+          return;
+        }
+
+        // Group by merchant name for other transactions
+        const merchant = extractMerchantName(desc) || 'Other Income';
+        const key = `MERCHANT:${merchant}`;
+        const prev = rowsMap.get(key) || { name: merchant, total_amount: 0, transaction_count: 0 };
+        prev.total_amount += Math.abs(amount);
+        prev.transaction_count += 1;
+        rowsMap.set(key, prev);
+        
+        // Debug logging to see grouping
+        debug.log(`Business Income: "${desc}" -> "${merchant}" (${formatCurrency(amount)})`)
+      });
+
+      const rows = Array.from(rowsMap.values());
+      // Sort by total amount descending
+      rows.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
+      
+      // Debug: show final grouped results
+      debug.log('Business Income Summary:', rows.map(r => `${r.name}: ${formatCurrency(r.total_amount)} (${r.transaction_count} txns)`));
+      
+      return rows;
+    } catch (e) {
+      console.error('Error computing business income rows:', e);
+      return [];
+    }
+  };
+
+  // Compute Business Expenses (Software and Employees subcategories)
+  const computeBusinessExpenseRows = () => {
+    try {
+      const rowsMap = new Map();
+      (transactions || []).forEach(t => {
+        if (!t || t.status === 'income') return; // exclude income transactions
+        
+        const amount = Math.abs(Number(t?.amount) || 0);
+        if (amount <= 0) return; // skip zero amounts
+        
+        const category = t.category || '';
+        
+        // Check if this is a Business Expenses category
+        const isBusinessExpense = category.startsWith('Business Expenses - ') || 
+                                 category === 'Business Expenses - Software' || 
+                                 category === 'Business Expenses - Employees';
+        
+        if (!isBusinessExpense) return;
+        
+        const desc = t.description || '';
+        
+        // Extract subcategory from full category name
+        let subcategory = 'Business Expenses';
+        if (category.includes(' - ')) {
+          subcategory = category.split(' - ')[1] || 'Business Expenses';
+        }
+        
+        const key = `BIZEXP:${subcategory}`;
+        const prev = rowsMap.get(key) || { 
+          name: subcategory, 
+          categoryGroup: 'Business Expenses',
+          total_amount: 0, 
+          transaction_count: 0 
+        };
+        prev.total_amount += amount;
+        prev.transaction_count += 1;
+        rowsMap.set(key, prev);
+        
+        debug.log(`Business Expense: "${desc}" (${category}) -> "${subcategory}" (${formatCurrency(amount)})`);
+      });
+
+      const rows = Array.from(rowsMap.values());
+      // Sort by total amount descending
+      rows.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
+      
+      debug.log('Business Expense Summary:', rows.map(r => `${r.name}: ${formatCurrency(r.total_amount)} (${r.transaction_count} txns)`));
+      
+      return rows;
+    } catch (e) {
+      console.error('Error computing business expense rows:', e);
+      return [];
     }
   };
 
@@ -1384,8 +1575,8 @@ export default function Report({ data, onDownloadPDF }) {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {transactions.map((transaction, index) => (
-                  <tr key={index} className={
+                {paginatedTransactions.map((transaction, index) => (
+                  <tr key={`${transaction.transaction_key || transaction.description}-${(currentPage - 1) * pageSize + index}`} className={
                     transaction.status === 'income' 
                       ? 'bg-gray-100 opacity-60' 
                       : index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
@@ -1483,7 +1674,6 @@ export default function Report({ data, onDownloadPDF }) {
                                   + Add New Category
                                 </div>
                                 {(() => {
-                                  const organizedCategories = organizeCategories(categories);
                                   const expenseGroups = ['Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses', 'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses', 'Business Expenses'];
                                   const incomeGroups = ['Business', 'Personal Income'];
 
@@ -1612,6 +1802,39 @@ export default function Report({ data, onDownloadPDF }) {
             </table>
           </div>
 
+          <div className="flex items-center justify-between mt-3">
+            <div className="text-xs text-gray-600">
+              Page {currentPage} of {totalPages} · Showing {paginatedTransactions.length} of {transactions.length}
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                className="px-2 py-1 text-xs border rounded disabled:opacity-50"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+              >
+                Prev
+              </button>
+              <button
+                className="px-2 py-1 text-xs border rounded disabled:opacity-50"
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+              >
+                Next
+              </button>
+              <select
+                className="text-xs border rounded px-1 py-1"
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value) || 50)}
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+                <option value={500}>500</option>
+              </select>
+            </div>
+          </div>
+
         </div>
 
         {/* Income Summary */}
@@ -1620,18 +1843,18 @@ export default function Report({ data, onDownloadPDF }) {
             <h3 className="text-xl font-semibold text-gray-900 mb-4">Income Summary</h3>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-green-50">
+                <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Income Type
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Amount
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Transactions
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-green-700 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Percentage
                     </th>
                   </tr>
@@ -1639,11 +1862,11 @@ export default function Report({ data, onDownloadPDF }) {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {/* Preferred custom rows first */}
                   {computeIncomeSummaryRows().map((row, idx) => (
-                    <tr key={`custom-${row.name}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-green-50'}>
+                    <tr key={`custom-${row.name}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         {row.name}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600 font-semibold">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">
                         {formatCurrency(row.total_amount)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -1664,11 +1887,11 @@ export default function Report({ data, onDownloadPDF }) {
                     const remainingCount = Math.max(0, totalCount - customCount);
                     const percent = totalAmount > 0 ? Number(((totalAmount / totalAmount) * 100).toFixed(1)) : 0;
                     return (
-                      <tr key="total-income" className={(custom.length % 2 === 0) ? 'bg-white' : 'bg-green-50'}>
+                      <tr key="total-income" className="bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
                           Total Income
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-green-700 font-bold">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">
                           {formatCurrency(totalAmount)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">
@@ -1841,6 +2064,107 @@ export default function Report({ data, onDownloadPDF }) {
                   );
 
                   return rows;
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Business Income Table */}
+        <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Business Income</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transactions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {(() => {
+                  const rows = computeBusinessIncomeRows();
+                  if (rows.length === 0) {
+                    return (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">No business income found.</td>
+                      </tr>
+                    );
+                  }
+                  
+                  const totalAmount = rows.reduce((sum, row) => sum + (row.total_amount || 0), 0);
+                  const totalTransactions = rows.reduce((sum, row) => sum + (row.transaction_count || 0), 0);
+                  
+                  const allRows = [
+                    ...rows.map((row, idx) => (
+                      <tr key={`biz-income-${row.name}-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">{formatCurrency(row.total_amount)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.transaction_count}</td>
+                      </tr>
+                    )),
+                    // Total row
+                    <tr key="biz-income-total" className="bg-gray-50 border-t-2 border-gray-300">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">Total Business Income</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">{formatCurrency(totalAmount)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">{totalTransactions}</td>
+                    </tr>
+                  ];
+                  
+                  return allRows;
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Business Expense Table */}
+        <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">Business Expense</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category Group</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transactions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {(() => {
+                  const rows = computeBusinessExpenseRows();
+                  if (rows.length === 0) {
+                    return (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">No business expenses found.</td>
+                      </tr>
+                    );
+                  }
+                  
+                  const totalAmount = rows.reduce((sum, row) => sum + (row.total_amount || 0), 0);
+                  const totalTransactions = rows.reduce((sum, row) => sum + (row.transaction_count || 0), 0);
+                  
+                  const allRows = [
+                    ...rows.map((row, idx) => (
+                      <tr key={`biz-expense-${row.name}-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.categoryGroup}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold">{formatCurrency(row.total_amount)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.transaction_count}</td>
+                      </tr>
+                    )),
+                    // Total row
+                    <tr key="biz-expense-total" className="bg-gray-50 border-t-2 border-gray-300">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">Total</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">Business Expenses</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">{formatCurrency(totalAmount)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">{totalTransactions}</td>
+                    </tr>
+                  ];
+                  
+                  return allRows;
                 })()}
               </tbody>
             </table>
