@@ -4,9 +4,9 @@
  */
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
-import { getMonthlySummary } from '../../lib/api'
+import { getMonthlySummary, getCategories, getMonthlyGroupedSummary } from '../../lib/api'
 import { formatCurrency } from '../../lib/formatters'
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList } from 'recharts'
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D']
 
@@ -16,21 +16,64 @@ export default function Dashboard({ reports = [] }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [selectedPeriod, setSelectedPeriod] = useState('1') // Last month only
+  const [categoryNameToGroup, setCategoryNameToGroup] = useState({})
 
   // Fetch monthly summary data
   useEffect(() => {
     fetchMonthlyData()
   }, [selectedPeriod, JSON.stringify(reports)])
 
+  // Fetch categories to map category name -> group
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const cats = await getCategories()
+        // cats may be an array or an object with property `categories`
+        const list = Array.isArray(cats) ? cats : (cats?.categories || [])
+        const map = {}
+        list.forEach((c) => {
+          if (c?.name) {
+            map[c.name] = c.group || 'Other'
+          }
+        })
+        setCategoryNameToGroup(map)
+      } catch {
+        // Non-fatal; groups will default to 'Other'
+      }
+    }
+    loadCategories()
+  }, [])
+
   const fetchMonthlyData = async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // If reports are provided (Monthly Expense Report source), compute from them
+      // If reports are provided (Monthly Expense Report source), compute from them and try DB grouped summary
       if (reports && reports.length > 0) {
         const fromReports = computeFromReports(reports)
-        setMonthlyData(fromReports)
+        // Try DB grouped summary for this last month
+        const lastMonthKey = fromReports[0]?.month
+        let dbGroups = null
+        try {
+          if (lastMonthKey) {
+            const db = await getMonthlyGroupedSummary(lastMonthKey)
+            if (db?.groups) {
+              dbGroups = db.groups.map(g => ({
+                group: g.group,
+                percentage: Number(g.percentage || 0),
+                amount: Math.abs(Number(g.total_amount) || 0),
+                amountLabel: formatCurrency(Math.abs(Number(g.total_amount) || 0))
+              }))
+            }
+          }
+        } catch {}
+
+        if (dbGroups && dbGroups.length > 0) {
+          setMonthlyData([{ ...fromReports[0], _db_groups: dbGroups }])
+        } else {
+          setMonthlyData(fromReports)
+        }
         return
       }
 
@@ -59,7 +102,26 @@ export default function Dashboard({ reports = [] }) {
       }).sort((a, b) => new Date(b.month + '-01') - new Date(a.month + '-01'))
 
       if (transformed.length > 0) {
-        setMonthlyData(transformed)
+        // Also try DB grouped summary for this last month
+        let dbGroups = null
+        try {
+          const lastMonthKey = transformed[0].month
+          const db = await getMonthlyGroupedSummary(lastMonthKey)
+          if (db?.groups) {
+            dbGroups = db.groups.map(g => ({
+              group: g.group,
+              percentage: Number(g.percentage || 0),
+              amount: Math.abs(Number(g.total_amount) || 0),
+              amountLabel: formatCurrency(Math.abs(Number(g.total_amount) || 0))
+            }))
+          }
+        } catch {}
+
+        if (dbGroups && dbGroups.length > 0) {
+          setMonthlyData([{ ...transformed[0], _db_groups: dbGroups }])
+        } else {
+          setMonthlyData(transformed)
+        }
       } else {
         // Fallback: compute from locally saved reports (client-only)
         const local = computeFromLocalReports()
@@ -80,10 +142,10 @@ export default function Dashboard({ reports = [] }) {
     const currentMonth = monthlyData[0]
     const previousMonth = monthlyData[1]
     
-    const totalExpenses = monthlyData.reduce((sum, month) => sum + Math.abs(month.total_expenses || 0), 0)
-    const totalIncome = monthlyData.reduce((sum, month) => sum + Math.abs(month.total_income || 0), 0)
-    const avgMonthlyExpenses = totalExpenses / monthlyData.length
-    const avgMonthlyIncome = totalIncome / monthlyData.length
+    const totalExpenses = Math.abs(currentMonth.total_expenses || 0)
+    const totalIncome = Math.abs(currentMonth.total_income || 0)
+    const avgMonthlyExpenses = totalExpenses
+    const avgMonthlyIncome = totalIncome
 
     // Month-over-month changes
     const expenseChange = previousMonth ? 
@@ -116,24 +178,98 @@ export default function Dashboard({ reports = [] }) {
 
   // Prepare chart data
   const chartData = useMemo(() => {
-    return monthlyData.map(month => ({
-      month: new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-      expenses: Math.abs(month.total_expenses || 0),
-      income: Math.abs(month.total_income || 0),
-      net: (month.total_income || 0) - Math.abs(month.total_expenses || 0),
-    })).reverse() // Reverse to show chronological order in charts
-  }, [monthlyData])
+    const ensureAllGroups = (rows) => {
+      const expected = [
+        'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses',
+        'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses'
+      ]
+      const map = Object.fromEntries(rows.map(r => [r.group, r]))
+      const merged = expected.map(g => map[g] || ({ group: g, percentage: 0, amount: 0, amountLabel: formatCurrency(0) }))
+      return merged
+    }
+
+    // First, try DB-backed monthly grouped summary for accuracy
+    if (monthlyData.length === 1 && monthlyData[0]._db_groups) {
+      return ensureAllGroups(monthlyData[0]._db_groups)
+    }
+
+    // Prefer grouped data directly from the Monthly Expense Report (preserve report order)
+    if (reports && reports.length > 0) {
+      const source = selectLastMonthReport(reports)
+      const groups = source?.summary?.grouped_categories || []
+      if (groups.length > 0) {
+        const rows = groups.map((g) => {
+          const amount = Math.abs(Number(g.total_amount) || 0)
+          const pctRaw = g.percentage
+          const pct = typeof pctRaw === 'number' ? pctRaw : parseFloat(String(pctRaw || '0').replace('%', ''))
+          return {
+            group: g.group ?? 'Other',
+            percentage: isNaN(pct) ? 0 : pct,
+            amount,
+            amountLabel: formatCurrency(amount),
+          }
+        })
+        return ensureAllGroups(rows)
+      }
+    }
+
+    // Fallback: derive from monthlyData categories if grouped_categories not present
+    if (monthlyData.length === 0) return []
+    const current = monthlyData[0]
+    const categories = current.categories || []
+    const totalExpenses = Math.abs(current.total_expenses || 0) || 1
+
+    const groupTotals = {}
+    categories.forEach((cat) => {
+      const name = cat.category || 'Uncategorized'
+      const group = categoryNameToGroup[name] || 'Other'
+      const amt = Math.abs(cat.total_amount || 0)
+      groupTotals[group] = (groupTotals[group] || 0) + amt
+    })
+
+    const rows = Object.keys(groupTotals).map((group) => {
+      const amount = groupTotals[group]
+      const percentage = (amount / totalExpenses) * 100
+      return {
+        group,
+        percentage: Number(percentage.toFixed(2)),
+        amount,
+        amountLabel: formatCurrency(amount),
+      }
+    })
+    return ensureAllGroups(rows)
+  }, [reports, monthlyData, categoryNameToGroup])
+
+// Choose the report whose transactions are in the most recent month; fallback to most recent by date
+function selectLastMonthReport(reports) {
+  if (!Array.isArray(reports) || reports.length === 0) return null
+
+  const getMaxDateForReport = (rep) => {
+    const txs = rep?.transactions || []
+    let maxTs = -Infinity
+    txs.forEach((t) => {
+      const dt = new Date(t.date || t.transaction_date || t.posting_date)
+      const ts = dt.getTime()
+      if (!isNaN(ts)) maxTs = Math.max(maxTs, ts)
+    })
+    return maxTs
+  }
+
+  // Find report with max date
+  let best = null
+  let bestTs = -Infinity
+  for (const r of reports) {
+    const ts = getMaxDateForReport(r)
+    if (ts > bestTs) {
+      bestTs = ts
+      best = r
+    }
+  }
+  return best
+}
 
   // Category breakdown for current month
-  const categoryData = useMemo(() => {
-    if (monthlyData.length === 0 || !monthlyData[0].categories) return []
-
-    return monthlyData[0].categories.map(cat => ({
-      name: cat.category,
-      value: Math.abs(cat.total_amount || 0),
-      count: cat.transaction_count || 0
-    })).slice(0, 6) // Top 6 categories
-  }, [monthlyData])
+  const categoryData = []
 
   if (loading) {
     return (
@@ -186,15 +322,7 @@ export default function Dashboard({ reports = [] }) {
       {/* Period Selection */}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">Financial Dashboard</h2>
-        <select
-          value={selectedPeriod}
-          onChange={(e) => setSelectedPeriod(e.target.value)}
-          className="border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="3">Last 3 Months</option>
-          <option value="6">Last 6 Months</option>
-          <option value="12">Last 12 Months</option>
-        </select>
+        <div className="text-sm text-gray-600">Last Month</div>
       </div>
 
       {/* Key Metrics Cards */}
@@ -282,112 +410,25 @@ export default function Dashboard({ reports = [] }) {
         </div>
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Monthly Trend Chart */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Monthly Trends</h3>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(value) => [formatCurrency(value), '']} />
-                <Legend />
-                <Line type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={2} name="Expenses" />
-                <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} name="Income" />
-                <Line type="monotone" dataKey="net" stroke="#3b82f6" strokeWidth={2} name="Net" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Category Breakdown */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Top Categories This Month</h3>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categoryData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {categoryData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => [formatCurrency(value), 'Amount']} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Monthly Comparison Bar Chart */}
+      {/* Expense Distribution by Group (Last Month) */}
       <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Monthly Comparison</h3>
-        <div className="h-80">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Expense Distribution by Group (Last Month)</h3>
+        <div className="h-96">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData}>
+            <BarChart data={chartData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(value) => [formatCurrency(value), '']} />
+              <XAxis type="number" tickFormatter={(v) => `${v}%`} domain={[0, 100]} allowDecimals={false} />
+              <YAxis type="category" dataKey="group" width={160} />
+              <Tooltip formatter={(value, name) => {
+                if (name === 'Expense Share') return [`${Number(value).toFixed(2)}%`, 'Expense Share']
+                return [value, name]
+              }} />
               <Legend />
-              <Bar dataKey="expenses" fill="#ef4444" name="Expenses" />
-              <Bar dataKey="income" fill="#22c55e" name="Income" />
+              <Bar dataKey="percentage" name="Expense Share" fill="#3b82f6" isAnimationActive={false}>
+                <LabelList dataKey="amountLabel" position="right" formatter={(v) => v} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Monthly Summary Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">Monthly Summary</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Month</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expenses</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Income</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Net</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transactions</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {monthlyData.map((month, index) => (
-                <tr key={month.month} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-semibold">
-                    {formatCurrency(Math.abs(month.total_expenses || 0))}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600 font-semibold">
-                    {formatCurrency(Math.abs(month.total_income || 0))}
-                  </td>
-                  <td className={`px-6 py-4 whitespace-nowrap text-sm font-semibold ${
-                    ((month.total_income || 0) - Math.abs(month.total_expenses || 0)) >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {formatCurrency((month.total_income || 0) - Math.abs(month.total_expenses || 0))}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {month.total_transactions || 0}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
     </div>

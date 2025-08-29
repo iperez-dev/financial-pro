@@ -93,7 +93,7 @@ def _get_categories_for_user(user_id: str, user_token: Optional[str] = None) -> 
             "id": str(cat.get("id")),
             "name": cat.get("name"),
             "keywords": cat.get("keywords", []),
-            "group": cat.get("group_name", "Other"),
+            "group": cat.get("group_name", "Other Expenses"),
         }
         for cat in categories or []
     ]
@@ -1047,6 +1047,80 @@ async def get_monthly_summary(months: Optional[str] = None, current_user: dict =
         return {"months": monthly, "requested_months": month_list}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting monthly summary: {str(e)}")
+
+@app.get("/summary/monthly-grouped")
+async def get_monthly_grouped_summary(month: Optional[str] = None, current_user: dict = Depends(get_user_or_dev_mode)):
+    """Return grouped expense summary (by category group) for a given month from persisted transactions.
+    If no month is provided, defaults to current YYYY-MM.
+    """
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        # Default to current month
+        if not month:
+            today = datetime.utcnow()
+            month = f"{today.year:04d}-{today.month:02d}"
+
+        # Compute date bounds
+        y, m = [int(x) for x in month.split("-")]
+        start_date = f"{y:04d}-{m:02d}-01"
+        last = calendar.monthrange(y, m)[1]
+        end_date = f"{y:04d}-{m:02d}-{last:02d}"
+
+        client = get_client(token)
+        # Fetch expenses only (amount < 0); filter month in Python to be robust to date formats/nulls
+        result = client.table('transactions').select('amount, transaction_date, posting_date, category_name').eq('user_id', user_id).lt('amount', 0).execute()
+
+        # Build category -> amount map
+        categories = _get_categories_for_user(user_id, token)
+        category_to_group = {cat['name']: cat.get('group', 'Other Expenses') for cat in categories}
+
+        group_totals: Dict[str, Any] = {}
+        total_abs = 0.0
+        for row in result.data or []:
+            # Determine the row's date from transaction_date or posting_date
+            raw_dt = row.get('transaction_date') or row.get('posting_date')
+            try:
+                dt = pd.to_datetime(raw_dt)
+            except Exception:
+                dt = None
+            if dt is None or pd.isna(dt):
+                continue
+            if dt.year != y or dt.month != m:
+                continue
+            amount = float(row.get('amount', 0) or 0)
+            cat_name = row.get('category_name') or 'Uncategorized'
+            group = category_to_group.get(cat_name, 'Other Expenses')
+            abs_amt = abs(amount)
+            total_abs += abs_amt
+            bucket = group_totals.setdefault(group, { 'group': group, 'total_amount': 0.0, 'transaction_count': 0 })
+            bucket['total_amount'] += abs_amt
+            bucket['transaction_count'] += 1
+
+        # Ensure all 10 expected groups appear (even if zero)
+        expected_groups = [
+            'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses',
+            'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses'
+        ]
+        for g in expected_groups:
+            group_totals.setdefault(g, { 'group': g, 'total_amount': 0.0, 'transaction_count': 0 })
+
+        grouped_list = list(group_totals.values())
+        for g in grouped_list:
+            g['percentage'] = round((g['total_amount'] / total_abs * 100), 2) if total_abs > 0 else 0.0
+
+        # Preserve canonical order of expected groups at the top, then others
+        order_index = {name: idx for idx, name in enumerate(expected_groups)}
+        grouped_list.sort(key=lambda x: order_index.get(x['group'], 999))
+
+        return {
+            'month': month,
+            'groups': grouped_list,
+            'total_expenses': total_abs
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting monthly grouped summary: {str(e)}")
 
 @app.post("/process-multiple-expenses")
 async def process_multiple_expenses(files: List[UploadFile] = File(...), current_user: dict = Depends(get_user_or_dev_mode)):
