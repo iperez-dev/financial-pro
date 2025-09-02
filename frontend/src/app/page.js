@@ -5,12 +5,14 @@ import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FileUpload from './components/FileUpload';
 import Report from './components/Report';
 import MultiReport from './components/MultiReport';
+import MonthlyReportView from './components/MonthlyReportView';
 import BusinessDashboard from './components/BusinessDashboard';
 import Dashboard from './components/Dashboard';
 import AccountTypeSelection from './components/AccountTypeSelection';
 import IndividualAuthForm from './components/IndividualAuthForm';
 import BusinessAuthForm from './components/BusinessAuthForm';
 import Sidebar from './components/Sidebar';
+import { useMemo } from 'react';
 
 
 function FinancialProApp() {
@@ -23,6 +25,9 @@ function FinancialProApp() {
   const [authFlow, setAuthFlow] = useState('account-selection'); // 'account-selection', 'individual-auth', 'business-auth'
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [currentPage, setCurrentPage] = useState('reports'); // Default to reports page
+  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [monthsList, setMonthsList] = useState([]);
+  const [monthsWithData, setMonthsWithData] = useState([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const uploaderRef = useRef(null);
 
@@ -68,6 +73,45 @@ function FinancialProApp() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Load months list from backend summary when opening Monthly page
+  useEffect(() => {
+    const loadMonths = async () => {
+      try {
+        const token = getAuthToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/summary/monthly`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          const months = Object.keys(data.months || {}).sort();
+          setMonthsList(months.length ? months : makeMonthList());
+          setMonthsWithData(months);
+          if (!selectedMonth && months.length > 0) setSelectedMonth(months[months.length - 1]);
+        } else {
+          setMonthsList(makeMonthList());
+        }
+      } catch (e) {
+        console.error('Failed to load months summary', e);
+      }
+    };
+    if (currentPage === 'monthly') {
+      loadMonths();
+    }
+  }, [currentPage, getAuthToken, selectedMonth]);
+
+  const makeMonthList = () => {
+    const d = new Date();
+    const arr = [];
+    for (let i = 0; i < 12; i++) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1 - i).padStart(2, '0');
+      let year = y;
+      let month = Number(m);
+      while (month <= 0) { year -= 1; month += 12; }
+      arr.push(`${year}-${String(month).padStart(2, '0')}`);
+    }
+    return arr.reverse();
+  };
 
   // Scroll to top function
   const scrollToTop = () => {
@@ -287,6 +331,61 @@ function FinancialProApp() {
     console.log(`Navigating to: ${pageId}`);
   };
 
+  // (Removed duplicate loadMonths effect - handled earlier)
+
+  const saveCurrentReport = async () => {
+    try {
+      const token = getAuthToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      };
+
+      // Determine the month from transactions if present
+      const firstReport = reportData || (multiReportData && multiReportData.reports && multiReportData.reports[0]);
+      const txs = firstReport?.transactions || [];
+      if (txs.length === 0) return alert('No transactions to save');
+      const firstWithDate = txs.find(t => t.date);
+      let month = null;
+      if (firstWithDate?.date) {
+        const d = new Date(firstWithDate.date);
+        if (!isNaN(d)) {
+          month = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`;
+        }
+      }
+
+      const payload = {
+        month,
+        filename: firstReport?.filename || undefined,
+        transactions: txs.map(t => ({
+          description: t.description,
+          amount: t.amount,
+          date: t.date || null,
+          category: t.category,
+          status: t.status,
+          transaction_key: t.transaction_key
+        }))
+      };
+
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/reports/monthly/save`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to save report');
+      }
+      const data = await res.json();
+      alert(data.message || 'Report saved');
+      // Refresh months list
+      setCurrentPage('monthly');
+    } catch (e) {
+      console.error('Save report failed', e);
+      alert(e.message || 'Save report failed');
+    }
+  };
+
   const handleAddMoreReports = () => {
     if (uploaderRef.current && typeof uploaderRef.current.open === 'function') {
       uploaderRef.current.open();
@@ -335,6 +434,12 @@ function FinancialProApp() {
                       className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                     >
                       Add More Reports
+                    </button>
+                    <button
+                      onClick={saveCurrentReport}
+                      className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      Save Report
                     </button>
                     <button
                       onClick={handleReset}
@@ -410,19 +515,32 @@ function FinancialProApp() {
               <Dashboard reports={allReports} />
             )}
 
-            {currentPage === 'categories' && (
-              <div className="text-center py-12">
-                <div className="max-w-md mx-auto">
-                  <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center mb-4">
-                    <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                    </svg>
+            {currentPage === 'monthly' && (
+              <div>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-semibold">Monthly Expense</h3>
+                  <div className="flex items-center space-x-2">
+                    <label className="text-sm text-gray-600">Month:</label>
+                    <select
+                      value={selectedMonth || ''}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="text-sm border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="" disabled>{monthsList.length ? 'Select month' : 'No months'}</option>
+                      {monthsList.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
                   </div>
-                  <h3 className="text-lg font-medium text-gray-900 mb-2">Category Management Coming Soon</h3>
-                  <p className="text-gray-600">This page will allow you to create and manage custom expense categories.</p>
                 </div>
+                {selectedMonth ? (
+                  <MonthlyReportView month={selectedMonth} token={getAuthToken()} />
+                ) : (
+                  <div className="text-gray-600 mt-4">Select a month to view details.</div>
+                )}
               </div>
             )}
+            
 
             {currentPage === 'settings' && (
               <div className="text-center py-12">

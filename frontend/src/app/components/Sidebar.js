@@ -8,7 +8,11 @@ const Sidebar = ({
   onNavigate,
   user,
   onLogout,
-  onCollapseChange
+  onCollapseChange,
+  monthsList = [],
+  selectedMonth = null,
+  onSelectMonth,
+  monthsWithData = []
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -35,8 +39,8 @@ const Sidebar = ({
         )
       },
       {
-        id: 'categories',
-        label: 'Categories',
+        id: 'monthly',
+        label: 'Monthly Expense',
         icon: (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
@@ -166,6 +170,24 @@ const Sidebar = ({
             )}
           </button>
         ))}
+
+        {/* Monthly submenu */}
+        {!isCollapsed && currentPage === 'monthly' && monthsList && monthsList.length > 0 && (
+          <div className="ml-8 mt-1 space-y-1">
+            {monthsList.map((m) => (
+              <button
+                key={m}
+                onClick={() => onSelectMonth?.(m)}
+                className={`w-full text-left text-sm px-2 py-1 rounded flex items-center justify-between ${selectedMonth === m ? 'bg-blue-100 text-blue-700' : 'text-gray-700 hover:bg-gray-100'}`}
+              >
+                <span>{m}</span>
+                {monthsWithData.includes(m) && (
+                  <span className="ml-2 inline-block w-2 h-2 rounded-full bg-green-500" title="Data available"></span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* Footer */}

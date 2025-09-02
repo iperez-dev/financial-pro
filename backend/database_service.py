@@ -87,8 +87,7 @@ class DatabaseService:
             client.table('transactions').update({
                 'category_name': 'Uncategorized',
                 'category_id': None,
-                'status': 'new',
-                'is_learned': False
+                'status': 'new'
             }).eq('user_id', user_id).eq('category_name', category_name).execute()
         except Exception as e:
             print(f"Error clearing category from transactions: {e}")
@@ -223,31 +222,88 @@ class DatabaseService:
         try:
             # Prepare transactions for database
             db_transactions = []
+            allowed_status: set = {'new', 'categorized', 'reviewed'}
             for trans in transactions:
+                tx_date = trans.get('transaction_date') or trans.get('date')
+                post_date = trans.get('posting_date') or trans.get('date') or tx_date
+                amt = float(trans.get('amount', 0) or 0)
+                raw_status_val = trans.get('status')
+                raw_status = str(raw_status_val).strip().lower() if raw_status_val is not None else ''
+                if raw_status in allowed_status:
+                    status_final = raw_status
+                elif raw_status in {'saved', 'success', 'categorized_saved'}:
+                    status_final = 'categorized'
+                else:
+                    status_final = 'new'
                 db_trans = {
                     'user_id': user_id,
                     'description': trans.get('description', ''),
-                    'amount': float(trans.get('amount', 0)),
-                    'transaction_date': trans.get('date'),
-                    'posting_date': trans.get('date'),  # Use same date if posting_date not available
+                    'amount': amt,
+                    'transaction_date': tx_date,
+                    'posting_date': post_date,
                     'category_name': trans.get('category', 'Uncategorized'),
-                    'status': trans.get('status', 'new'),
                     'transaction_key': trans.get('transaction_key', str(uuid.uuid4())),
                     'merchant_name': trans.get('merchant_name'),
-                    'is_learned': trans.get('is_learned', False),
                     'file_name': file_info.get('name') if file_info else None,
                     'file_hash': file_info.get('hash') if file_info else None
                 }
                 db_transactions.append(db_trans)
             
-            # Insert transactions (use upsert to handle duplicates)
+            # Deduplicate within the same batch to avoid ON CONFLICT affecting a row twice
+            unique_by_key: Dict[str, Dict[str, Any]] = {}
+            for item in db_transactions:
+                # Last one wins if duplicates are present in the same payload
+                unique_by_key[item['transaction_key']] = item
+            deduped_transactions = list(unique_by_key.values())
+
+            # Robust per-row save: UPDATE then fallback to INSERT per row
             client = get_client(user_token)
-            result = client.table('transactions').upsert(db_transactions, on_conflict='user_id,transaction_key').execute()
-            
+            inserted_count = 0
+            updated_count = 0
+            result_rows: List[Dict[str, Any]] = []
+
+            for row in deduped_transactions:
+                key = row.get('transaction_key')
+                try:
+                    payload = {k: v for k, v in row.items() if k not in ('user_id', 'transaction_key')}
+                    upd = client.table('transactions') \
+                        .update(payload) \
+                        .eq('user_id', user_id) \
+                        .eq('transaction_key', key) \
+                        .execute()
+                    if upd.data and len(upd.data) > 0:
+                        updated_count += len(upd.data)
+                        result_rows.extend(upd.data)
+                        continue
+                except Exception as e_upd:
+                    print(f"Update error for key {key}: {e_upd}")
+                # If no update, try insert single row
+                try:
+                    ins = client.table('transactions').insert([row]).execute()
+                    if ins.data:
+                        inserted_count += len(ins.data)
+                        result_rows.extend(ins.data)
+                except Exception as e_ins:
+                    # As last resort, try update again (race conditions)
+                    print(f"Insert error for key {key}: {e_ins}")
+                    try:
+                        upd2 = client.table('transactions') \
+                            .update(payload) \
+                            .eq('user_id', user_id) \
+                            .eq('transaction_key', key) \
+                            .execute()
+                        if upd2.data:
+                            updated_count += len(upd2.data)
+                            result_rows.extend(upd2.data)
+                    except Exception as e_upd2:
+                        print(f"Second update error for key {key}: {e_upd2}")
+                        continue
+
             return {
                 'success': True,
-                'inserted': len(result.data) if result.data else 0,
-                'transactions': result.data
+                'inserted': inserted_count,
+                'updated': updated_count,
+                'transactions': result_rows
             }
         except Exception as e:
             print(f"Error saving transactions: {e}")
@@ -460,8 +516,7 @@ class DatabaseService:
             client.table('transactions').update({
                 'category_name': 'Other',
                 'category_id': None,
-                'status': 'new',
-                'is_learned': False
+                'status': 'new'
             }).eq('user_id', user_id).neq('status', 'income').execute()
             
             return True

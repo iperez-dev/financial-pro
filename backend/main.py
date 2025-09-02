@@ -12,6 +12,7 @@ from pydantic import BaseModel
 import hashlib
 from datetime import datetime
 import calendar
+import re
 
 # Import Supabase components
 from supabase_client import supabase
@@ -78,6 +79,20 @@ class CategoryUpdate(BaseModel):
 
 class CategoryUpdateRequest(BaseModel):
     category: str
+
+# Report save request models
+class TransactionIn(BaseModel):
+    description: str
+    amount: float
+    date: Optional[str] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
+    transaction_key: Optional[str] = None
+
+class SaveMonthlyReportRequest(BaseModel):
+    month: Optional[str] = None  # YYYY-MM
+    transactions: List[TransactionIn]
+    filename: Optional[str] = None
 
 # Database-based category management
 # Categories are now stored in the database and managed per user
@@ -1076,6 +1091,42 @@ async def get_monthly_grouped_summary(month: Optional[str] = None, current_user:
         categories = _get_categories_for_user(user_id, token)
         category_to_group = {cat['name']: cat.get('group', 'Other Expenses') for cat in categories}
 
+        def _normalize(text: str) -> str:
+            if text is None:
+                return ''
+            return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
+
+        def _map_group_for_name(raw_name: str) -> str:
+            grp = category_to_group.get(raw_name)
+            if grp:
+                return grp
+            norm = _normalize(raw_name)
+            for cat in categories:
+                cn = cat.get('name') or ''
+                cnorm = _normalize(cn)
+                if not cnorm:
+                    continue
+                if norm == cnorm or norm in cnorm or cnorm in norm:
+                    return cat.get('group', 'Other Expenses')
+            synonyms = {
+                'other': 'Other Expenses',
+                'other expenses': 'Other Expenses',
+                'personal': 'Personal Expenses',
+                'personal expenses': 'Personal Expenses',
+                'shopping food': 'Shopping & Food',
+                'shopping & food': 'Shopping & Food',
+                'health care': 'Healthcare',
+                'healthcare': 'Healthcare',
+                'transportation': 'Transportation',
+                'utilities': 'Utilities',
+                'housing': 'Housing',
+                'debt': 'Debt',
+                'financial': 'Financial',
+                'child expenses': 'Child Expenses',
+                'children': 'Child Expenses',
+            }
+            return synonyms.get(norm, 'Other Expenses')
+
         group_totals: Dict[str, Any] = {}
         total_abs = 0.0
         for row in result.data or []:
@@ -1091,7 +1142,7 @@ async def get_monthly_grouped_summary(month: Optional[str] = None, current_user:
                 continue
             amount = float(row.get('amount', 0) or 0)
             cat_name = row.get('category_name') or 'Uncategorized'
-            group = category_to_group.get(cat_name, 'Other Expenses')
+            group = _map_group_for_name(cat_name)
             abs_amt = abs(amount)
             total_abs += abs_amt
             bucket = group_totals.setdefault(group, { 'group': group, 'total_amount': 0.0, 'transaction_count': 0 })
@@ -1201,6 +1252,192 @@ async def process_multiple_expenses(files: List[UploadFile] = File(...), current
     except Exception as e:
         print(f"Error processing multiple files: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
+
+# Monthly report persistence and retrieval
+@app.post("/reports/monthly/save")
+async def save_monthly_report(payload: SaveMonthlyReportRequest, current_user: dict = Depends(get_user_or_dev_mode)):
+    """
+    Save a month's transactions (and associated categories/status) to the database.
+    If month is not provided, it will be derived from the first transaction date.
+    """
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+        if not payload.transactions or len(payload.transactions) == 0:
+            raise HTTPException(status_code=400, detail="No transactions provided")
+
+        # Derive month if not provided
+        month = payload.month
+        if not month:
+            first = next((t for t in payload.transactions if t.date), None)
+            if not first or not first.date:
+                raise HTTPException(status_code=400, detail="Month not provided and could not be inferred from transactions")
+            try:
+                dt = pd.to_datetime(first.date)
+                month = dt.strftime('%Y-%m')
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid date format in transactions; unable to infer month")
+
+        # Prepare transactions for persistence (ensure non-null transaction_date)
+        first_day_of_month = f"{month}-01"
+        tx_payload: List[Dict[str, Any]] = []
+        allowed_status = {'new', 'categorized', 'reviewed'}
+        for t in payload.transactions:
+            tx_date = t.date or first_day_of_month
+            # Normalize status to satisfy DB constraint and sanitize input
+            amt = float(t.amount or 0)
+            raw_status = (t.status or '').strip().lower()
+            # Use only allowed values; map aliases; default to 'new'
+            if raw_status in allowed_status:
+                status_norm = raw_status
+            elif raw_status in {'saved', 'success', 'categorized_saved'}:
+                status_norm = 'categorized'
+            else:
+                status_norm = 'new'
+            tx_payload.append({
+                'description': t.description,
+                'amount': amt,
+                'transaction_date': tx_date,
+                'posting_date': tx_date,
+                'category_name': t.category,
+                'transaction_key': t.transaction_key,
+            })
+
+        file_info = {'name': payload.filename or f"monthly_{month}.csv", 'hash': None}
+        result = DatabaseService.save_transactions(user_id, tx_payload, file_info, token)
+        if not result.get('success'):
+            raise HTTPException(status_code=500, detail=result.get('error', 'Failed to save transactions'))
+
+        return {"message": f"Saved {len(tx_payload)} transactions for {month}", "month": month, "inserted": result.get('inserted', 0)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving monthly report: {str(e)}")
+
+@app.get("/reports/monthly/{month}")
+async def get_monthly_report(month: str, current_user: dict = Depends(get_user_or_dev_mode)):
+    """
+    Build a report for a given month (YYYY-MM) from persisted transactions,
+    returning the same shape as a processed file report.
+    """
+    try:
+        user_id = current_user["id"]
+        token = current_user.get("token")
+
+        # Compute date bounds
+        y, m = [int(x) for x in month.split("-")]
+        start_date = f"{y:04d}-{m:02d}-01"
+        last = calendar.monthrange(y, m)[1]
+        end_date = f"{y:04d}-{m:02d}-{last:02d}"
+
+        client = get_client(token)
+        result = client.table('transactions').select('*').eq('user_id', user_id).gte('transaction_date', start_date).lte('transaction_date', end_date).execute()
+        rows = result.data or []
+
+        # Construct DataFrame similar to processing pipeline
+        df_rows = []
+        for r in rows:
+            df_rows.append({
+                'description': r.get('description'),
+                'amount': float(r.get('amount', 0) or 0),
+                'date': r.get('transaction_date') or r.get('posting_date'),
+                'category': r.get('category_name') or 'Uncategorized',
+                'status': r.get('status') or ('income' if (r.get('amount') or 0) >= 0 else 'new'),
+                'transaction_key': r.get('transaction_key')
+            })
+
+        if not df_rows:
+            return {
+                "success": True,
+                "filename": f"monthly_{month}",
+                "summary": {
+                    "total_expenses": 0.0,
+                    "total_income": 0.0,
+                    "total_transactions": 0,
+                    "expense_transactions": 0,
+                    "income_transactions": 0,
+                    "categories": [],
+                    "grouped_categories": [],
+                    "income_categories": []
+                },
+                "transactions": [],
+                "monthly_data": []
+            }
+
+        df = pd.DataFrame(df_rows)
+        # Calculate summary statistics - separate income from expenses
+        expenses_df = df[df['amount'] < 0].copy()
+        income_df = df[df['amount'] >= 0].copy()
+        total_expenses = float(expenses_df['amount'].sum())
+        total_income = float(income_df['amount'].sum()) if len(income_df) > 0 else 0.0
+        total_transactions = len(df)
+        expense_transactions = len(expenses_df)
+        income_transactions = len(income_df)
+
+        # Category breakdown for expenses
+        if len(expenses_df) > 0:
+            category_summary = expenses_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+            category_summary.columns = ['category', 'total_amount', 'transaction_count']
+        else:
+            category_summary = pd.DataFrame(columns=['category', 'total_amount', 'transaction_count'])
+
+        total_abs_expenses = float(expenses_df['amount'].abs().sum()) if len(expenses_df) > 0 else 0.0
+        if len(category_summary) > 0:
+            category_summary['total_amount'] = category_summary['total_amount'].abs()
+            category_summary['percentage'] = (
+                category_summary['total_amount'] / total_abs_expenses * 100
+            ).round(2) if total_abs_expenses > 0 else 0
+        category_data = category_summary.to_dict('records') if len(category_summary) > 0 else []
+
+        # Income breakdown
+        income_data = []
+        if len(income_df) > 0:
+            income_summary = income_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+            income_summary.columns = ['category', 'total_amount', 'transaction_count']
+            income_summary['percentage'] = (
+                income_summary['total_amount'] / total_income * 100
+            ).round(2) if total_income > 0 else 0
+            income_data = income_summary.to_dict('records')
+
+        # Grouped categories (use user categories for group mapping)
+        categories = _get_categories_for_user(user_id, token)
+        category_to_group = {cat['name']: cat.get('group', 'Other') for cat in categories}
+        grouped = {}
+        for cat in category_data:
+            group = category_to_group.get(cat['category'], 'Other')
+            g = grouped.setdefault(group, { 'group': group, 'total_amount': 0.0, 'transaction_count': 0, 'categories': [] })
+            g['total_amount'] += cat['total_amount']
+            g['transaction_count'] += cat['transaction_count']
+            g['categories'].append(cat)
+        grouped_category_data = list(grouped.values())
+        total_group_amount = sum(g['total_amount'] for g in grouped_category_data)
+        for g in grouped_category_data:
+            g['percentage'] = round((g['total_amount'] / total_group_amount * 100), 2) if total_group_amount > 0 else 0
+
+        # Monthly data series only for the requested month
+        monthly_data = [{ 'month_year': month, 'amount': float(df['amount'].sum()) }]
+
+        transactions = df[['date', 'description', 'amount', 'category', 'status', 'transaction_key']].to_dict('records')
+
+        return {
+            "success": True,
+            "filename": f"monthly_{month}",
+            "summary": {
+                "total_expenses": total_expenses,
+                "total_income": total_income,
+                "total_transactions": total_transactions,
+                "expense_transactions": expense_transactions,
+                "income_transactions": income_transactions,
+                "categories": category_data,
+                "grouped_categories": grouped_category_data,
+                "income_categories": income_data
+            },
+            "transactions": transactions,
+            "monthly_data": monthly_data,
+            "message": f"Loaded monthly report for {month}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading monthly report: {str(e)}")
 
 # Zelle recipient management endpoints
 @app.get("/zelle-recipients")

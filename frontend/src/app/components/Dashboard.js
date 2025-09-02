@@ -4,11 +4,9 @@
  */
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
-import { getMonthlySummary, getCategories, getMonthlyGroupedSummary } from '../../lib/api'
+import { getMonthlySummary } from '../../lib/api'
 import { formatCurrency } from '../../lib/formatters'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList } from 'recharts'
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D']
 
 export default function Dashboard({ reports = [] }) {
   const { user } = useAuth()
@@ -23,26 +21,30 @@ export default function Dashboard({ reports = [] }) {
     fetchMonthlyData()
   }, [selectedPeriod, JSON.stringify(reports)])
 
-  // Fetch categories to map category name -> group
-  useEffect(() => {
-    const loadCategories = async () => {
-      try {
-        const cats = await getCategories()
-        // cats may be an array or an object with property `categories`
-        const list = Array.isArray(cats) ? cats : (cats?.categories || [])
-        const map = {}
-        list.forEach((c) => {
-          if (c?.name) {
-            map[c.name] = c.group || 'Other'
-          }
-        })
-        setCategoryNameToGroup(map)
-      } catch {
-        // Non-fatal; groups will default to 'Other'
-      }
-    }
-    loadCategories()
-  }, [])
+  // Removed category group mapping fetch (chart disabled)
+
+  // Chart feature removed (no grouped fetch)
+
+  // Parse helpers to handle values coming from DB as strings like "$1,234.56" or "33.48%"
+  function parseCurrencyToNumber(value) {
+    if (typeof value === 'number') return value
+    if (value == null) return 0
+    const str = String(value).trim()
+    if (!str) return 0
+    const hasParens = str.startsWith('(') && str.endsWith(')')
+    const normalized = str.replace(/[^0-9.\-]/g, '')
+    const num = parseFloat(normalized)
+    if (isNaN(num)) return 0
+    return hasParens ? -Math.abs(num) : num
+  }
+
+  function parsePercentageToNumber(value) {
+    if (typeof value === 'number') return value
+    if (value == null) return 0
+    const str = String(value).trim().replace('%', '')
+    const num = parseFloat(str)
+    return isNaN(num) ? 0 : num
+  }
 
   const fetchMonthlyData = async () => {
     try {
@@ -59,17 +61,27 @@ export default function Dashboard({ reports = [] }) {
           if (lastMonthKey) {
             const db = await getMonthlyGroupedSummary(lastMonthKey)
             if (db?.groups) {
-              dbGroups = db.groups.map(g => ({
-                group: g.group,
-                percentage: Number(g.percentage || 0),
-                amount: Math.abs(Number(g.total_amount) || 0),
-                amountLabel: formatCurrency(Math.abs(Number(g.total_amount) || 0))
-              }))
+              dbGroups = db.groups.map(g => {
+                const amt = Math.abs(parseCurrencyToNumber(g.total_amount))
+                const pct = parsePercentageToNumber(g.percentage)
+                return {
+                  group: g.group,
+                  percentage: pct,
+                  amount: amt,
+                  amountLabel: formatCurrency(amt)
+                }
+              })
             }
           }
         } catch {}
 
         if (dbGroups && dbGroups.length > 0) {
+          const hasNonZero = dbGroups.some(g => (g?.amount || 0) > 0)
+          if (!hasNonZero) {
+            // Ignore empty DB response (likely wrong month or no data); fallback to report-derived/groups
+            setMonthlyData(fromReports)
+            return
+          }
           setMonthlyData([{ ...fromReports[0], _db_groups: dbGroups }])
         } else {
           setMonthlyData(fromReports)
@@ -108,16 +120,26 @@ export default function Dashboard({ reports = [] }) {
           const lastMonthKey = transformed[0].month
           const db = await getMonthlyGroupedSummary(lastMonthKey)
           if (db?.groups) {
-            dbGroups = db.groups.map(g => ({
-              group: g.group,
-              percentage: Number(g.percentage || 0),
-              amount: Math.abs(Number(g.total_amount) || 0),
-              amountLabel: formatCurrency(Math.abs(Number(g.total_amount) || 0))
-            }))
+            dbGroups = db.groups.map(g => {
+              const amt = Math.abs(parseCurrencyToNumber(g.total_amount))
+              const pct = parsePercentageToNumber(g.percentage)
+              return {
+                group: g.group,
+                percentage: pct,
+                amount: amt,
+                amountLabel: formatCurrency(amt)
+              }
+            })
           }
         } catch {}
 
         if (dbGroups && dbGroups.length > 0) {
+          const hasNonZero = dbGroups.some(g => (g?.amount || 0) > 0)
+          if (!hasNonZero) {
+            // Ignore empty DB response; use computed monthly data only
+            setMonthlyData(transformed)
+            return
+          }
           setMonthlyData([{ ...transformed[0], _db_groups: dbGroups }])
         } else {
           setMonthlyData(transformed)
@@ -176,69 +198,7 @@ export default function Dashboard({ reports = [] }) {
     }
   }, [monthlyData])
 
-  // Prepare chart data
-  const chartData = useMemo(() => {
-    const ensureAllGroups = (rows) => {
-      const expected = [
-        'Housing', 'Utilities', 'Transportation', 'Shopping & Food', 'Child Expenses',
-        'Healthcare', 'Personal Expenses', 'Financial', 'Debt', 'Other Expenses'
-      ]
-      const map = Object.fromEntries(rows.map(r => [r.group, r]))
-      const merged = expected.map(g => map[g] || ({ group: g, percentage: 0, amount: 0, amountLabel: formatCurrency(0) }))
-      return merged
-    }
-
-    // First, try DB-backed monthly grouped summary for accuracy
-    if (monthlyData.length === 1 && monthlyData[0]._db_groups) {
-      return ensureAllGroups(monthlyData[0]._db_groups)
-    }
-
-    // Prefer grouped data directly from the Monthly Expense Report (preserve report order)
-    if (reports && reports.length > 0) {
-      const source = selectLastMonthReport(reports)
-      const groups = source?.summary?.grouped_categories || []
-      if (groups.length > 0) {
-        const rows = groups.map((g) => {
-          const amount = Math.abs(Number(g.total_amount) || 0)
-          const pctRaw = g.percentage
-          const pct = typeof pctRaw === 'number' ? pctRaw : parseFloat(String(pctRaw || '0').replace('%', ''))
-          return {
-            group: g.group ?? 'Other',
-            percentage: isNaN(pct) ? 0 : pct,
-            amount,
-            amountLabel: formatCurrency(amount),
-          }
-        })
-        return ensureAllGroups(rows)
-      }
-    }
-
-    // Fallback: derive from monthlyData categories if grouped_categories not present
-    if (monthlyData.length === 0) return []
-    const current = monthlyData[0]
-    const categories = current.categories || []
-    const totalExpenses = Math.abs(current.total_expenses || 0) || 1
-
-    const groupTotals = {}
-    categories.forEach((cat) => {
-      const name = cat.category || 'Uncategorized'
-      const group = categoryNameToGroup[name] || 'Other'
-      const amt = Math.abs(cat.total_amount || 0)
-      groupTotals[group] = (groupTotals[group] || 0) + amt
-    })
-
-    const rows = Object.keys(groupTotals).map((group) => {
-      const amount = groupTotals[group]
-      const percentage = (amount / totalExpenses) * 100
-      return {
-        group,
-        percentage: Number(percentage.toFixed(2)),
-        amount,
-        amountLabel: formatCurrency(amount),
-      }
-    })
-    return ensureAllGroups(rows)
-  }, [reports, monthlyData, categoryNameToGroup])
+  // Chart data removed
 
 // Choose the report whose transactions are in the most recent month; fallback to most recent by date
 function selectLastMonthReport(reports) {
@@ -410,27 +370,7 @@ function selectLastMonthReport(reports) {
         </div>
       </div>
 
-      {/* Expense Distribution by Group (Last Month) */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Expense Distribution by Group (Last Month)</h3>
-        <div className="h-96">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" tickFormatter={(v) => `${v}%`} domain={[0, 100]} allowDecimals={false} />
-              <YAxis type="category" dataKey="group" width={160} />
-              <Tooltip formatter={(value, name) => {
-                if (name === 'Expense Share') return [`${Number(value).toFixed(2)}%`, 'Expense Share']
-                return [value, name]
-              }} />
-              <Legend />
-              <Bar dataKey="percentage" name="Expense Share" fill="#3b82f6" isAnimationActive={false}>
-                <LabelList dataKey="amountLabel" position="right" formatter={(v) => v} />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      {/* Expense Distribution chart temporarily removed */}
     </div>
   )
 }
