@@ -19,6 +19,43 @@ const COLORS = [
 
 // formatFilename is imported from ../../lib/formatters
 
+// Build title using transactions' month instead of filename date
+const deriveMonthLabelFromTransactions = (txs) => {
+  const dates = (txs || [])
+    .map(t => new Date(t.date || t.transaction_date || t.posting_date))
+    .filter(d => !isNaN(d));
+  if (dates.length === 0) return null;
+  let minDate = dates[0];
+  for (const d of dates) {
+    if (d < minDate) minDate = d;
+  }
+  const y = minDate.getFullYear();
+  const m = String(minDate.getMonth() + 1).padStart(2, '0');
+  return `${y}.${m}`;
+};
+
+const buildReportTitle = (filename, txs) => {
+  const monthLabel = deriveMonthLabelFromTransactions(txs);
+  if (!filename && monthLabel) return `Transactions (${monthLabel})`;
+  if (!filename) return 'Transactions';
+
+  const nameWithoutExt = filename.replace(/\.(csv|xlsx|xls)$/i, '');
+  const activityMatch = nameWithoutExt.match(/^([A-Za-z]+)(\d+)_Activity_(\d{8})$/);
+  if (activityMatch) {
+    const [, bankName, accountNumber] = activityMatch;
+    return `${bankName} ${accountNumber} - Activity (${monthLabel || 'Unknown'})`;
+  }
+
+  const formatted = formatFilename(filename);
+  if (monthLabel) {
+    if (/\(.*\)/.test(formatted)) {
+      return formatted.replace(/\(.*\)/, `(${monthLabel})`);
+    }
+    return `${formatted} (${monthLabel})`;
+  }
+  return formatted;
+};
+
 export default function Report({ data, onDownloadPDF }) {
   const reportRef = useRef();
   const { getAuthToken } = useAuth();
@@ -1446,37 +1483,6 @@ export default function Report({ data, onDownloadPDF }) {
     <div className="w-full max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-3xl font-bold text-gray-900">Expense Report</h2>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={migrateToNewCategories}
-            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
-            title="Migrate to new category structure"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            <span>Migrate Categories</span>
-          </button>
-          <button
-            onClick={resetAllCategories}
-            className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
-            title="Clear all saved category assignments but keep transactions"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span>Reset Categories</span>
-          </button>
-          <button
-            onClick={handleDownloadPDF}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span>Download PDF</span>
-          </button>
-        </div>
       </div>
 
       <div ref={reportRef} className="bg-white">
@@ -1549,7 +1555,7 @@ export default function Report({ data, onDownloadPDF }) {
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xl font-semibold text-gray-900">
-              {formatFilename(data.filename)} ({transactions.length})
+              {buildReportTitle(data.filename, transactions)} ({transactions.length})
             </h3>
           </div>
           

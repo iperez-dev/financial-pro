@@ -80,15 +80,20 @@ function FinancialProApp() {
       try {
         const token = getAuthToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/summary/monthly`, { headers });
+        const fullList = makeMonthList(); // last 12 months
+        const query = encodeURIComponent(fullList.join(','));
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/summary/monthly?months=${query}`, { headers });
         if (res.ok) {
           const data = await res.json();
           const months = Object.keys(data.months || {}).sort();
-          setMonthsList(months.length ? months : makeMonthList());
           setMonthsWithData(months);
-          if (!selectedMonth && months.length > 0) setSelectedMonth(months[months.length - 1]);
+          setMonthsList(fullList);
+          if (!selectedMonth) {
+            const lastWithData = months.length > 0 ? months[months.length - 1] : null;
+            setSelectedMonth(lastWithData || fullList[fullList.length - 1] || null);
+          }
         } else {
-          setMonthsList(makeMonthList());
+          setMonthsList(fullList);
         }
       } catch (e) {
         console.error('Failed to load months summary', e);
